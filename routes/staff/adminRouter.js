@@ -1,12 +1,12 @@
 const express = require("express");
-const { registerCtrl, loginCtrl, getAllAdminCtrl, getSingleAdminCtrl, updateAdminCtrl, deleteAdminCtrl, adminSuspendTeacherCtrl, adminUnSuspendTeacherCtrl, adminUnWithdrawTeacherCtrl, adminPublishExamResultCtrl, adminWithdrawTeacherCtrl, adminUnPublishExamResultCtrl } = require("../../controller/staff/adminCtrl");
+const { getAllAdminCtrl, getSingleAdminCtrl, updateAdminCtrl, deleteAdminCtrl, adminSuspendTeacherCtrl, adminUnSuspendTeacherCtrl, adminUnWithdrawTeacherCtrl, adminPublishExamResultCtrl, adminWithdrawTeacherCtrl, adminUnPublishExamResultCtrl, adminRegisterCtrl, adminLoginCtrl } = require("../../controller/staff/adminCtrl");
 
 const adminRouter = express.Router();
 
 // Admin registered
-adminRouter.post("/register", registerCtrl);
+adminRouter.post("/register", adminRegisterCtrl);
 //login admin
-adminRouter.post("/login", loginCtrl);
+adminRouter.post("/login", adminLoginCtrl);
 
 // get all admin
 adminRouter.get("/", getAllAdminCtrl);
