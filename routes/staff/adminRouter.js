@@ -1,6 +1,7 @@
 const express = require("express");
-const { getAllAdminCtrl, getSingleAdminCtrl, updateAdminCtrl, deleteAdminCtrl, adminSuspendTeacherCtrl, adminUnSuspendTeacherCtrl, adminUnWithdrawTeacherCtrl, adminPublishExamResultCtrl, adminWithdrawTeacherCtrl, adminUnPublishExamResultCtrl, adminRegisterCtrl, adminLoginCtrl } = require("../../controller/staff/adminCtrl");
+const { getAllAdminCtrl, getAdminProfileCtrl, updateAdminCtrl, deleteAdminCtrl, adminSuspendTeacherCtrl, adminUnSuspendTeacherCtrl, adminUnWithdrawTeacherCtrl, adminPublishExamResultCtrl, adminWithdrawTeacherCtrl, adminUnPublishExamResultCtrl, adminRegisterCtrl, adminLoginCtrl } = require("../../controller/staff/adminCtrl");
 const isLoggedIn = require("../../middlewares/isLoggedin");
+const isAdmin = require("../../middlewares/isAdmin");
 
 const adminRouter = express.Router();
 
@@ -10,13 +11,13 @@ adminRouter.post("/register", adminRegisterCtrl);
 adminRouter.post("/login", adminLoginCtrl);
 
 // get all admin
-adminRouter.get("/", getAllAdminCtrl);
+adminRouter.get("/", isLoggedIn, getAllAdminCtrl);
 
 // get single admin
-adminRouter.get("/:id", isLoggedIn, getSingleAdminCtrl);
+adminRouter.get("/profile", isLoggedIn, isAdmin, getAdminProfileCtrl);
 
 // update admin
-adminRouter.put("/update/:id", updateAdminCtrl);
+adminRouter.put("/update", isLoggedIn, isAdmin, updateAdminCtrl);
 
 // delete admin
 adminRouter.delete("/delete/:id", deleteAdminCtrl);
