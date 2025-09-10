@@ -52,6 +52,6 @@ const questionSchema = new mongoose.Schema(
 
 // model
 // compile
-const Question = mongoose.model(Question, "questionSchema")
+const Question = mongoose.model("Question", questionSchema)
 
 module.exports = Question

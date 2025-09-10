@@ -2,11 +2,12 @@ const express = require("express");
 const morgan = require("morgan");
 const adminRouter = require("../routes/staff/adminRouter");
 const {globalErrorHandler, notFoundErr} = require("../middlewares/globalErrorHandler");
+const academicYearRouter = require("../routes/academic/academicYearRouter");
 
 const app = express();
 // middlewares
-app.use(morgan("dev"))
-app.use(express.json())
+app.use(morgan("dev"));
+app.use(express.json());
 
 // app.use((req, res, next) =>{
 //     console.log(`${req.method} & ${req.originalUrl}`);
@@ -37,7 +38,8 @@ app.use(express.json())
 
 // app.use(isLogin, isAdmin)
 // routes
-app.use("/api/v1/admin", adminRouter)
+app.use("/api/v1/admin", adminRouter);
+app.use("/api/v1/academic-years", academicYearRouter);
 
 // error middleware
 app.use(notFoundErr)

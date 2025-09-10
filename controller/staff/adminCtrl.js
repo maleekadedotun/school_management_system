@@ -4,6 +4,8 @@ const Admin = require("../../models/Staff/admin");
 const generateToken = require("../../utils/generateToken");
 const verifyToken = require("../../utils/verifyToken");
 const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
+
+
 //@desc register admin
 //@route POST /api/v1/admin/register
 //@access private
@@ -91,7 +93,7 @@ exports.getAllAdminCtrl = AsyncHandler( async(req,res) => {
 //@access private
 exports.getAdminProfileCtrl = AsyncHandler( async(req,res) => {
 //    console.log(req.userAuth);
-   const admin = await Admin.findById(req.userAuth._id).select("-password -createdAt -updatedAt");   
+   const admin = await Admin.findById(req.userAuth._id).select("-password -createdAt -updatedAt").populate("academicYears");   
    if (!admin) {
         throw new Error("Not an admin")
    }

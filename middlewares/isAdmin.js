@@ -6,7 +6,7 @@ const verifyToken = require("../utils/verifyToken");
 
 const isAdmin = async (req, res, next) => {
     // find user
-   const userId = req.userAuth._id
+   const userId = req?.userAuth?._id
    const userFound = await Admin.findById(userId);
    // check if is an admin
    if (userFound?.role === "admin") {

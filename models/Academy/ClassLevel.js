@@ -52,6 +52,6 @@ const classLevelSchema = new mongoose.Schema(
 
 // model
 // compile
-const ClassLevel = mongoose.model(ClassLevel, "classLevelSchema")
+const ClassLevel = mongoose.model("ClassLevel", classLevelSchema)
 
 module.exports = ClassLevel
