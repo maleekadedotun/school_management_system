@@ -8,13 +8,13 @@ const yearGroupSchema = new mongoose.Schema(
         },
 
         createdBy: {
-            types: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",
             required: true,
         },  
 
         academicYear: {
-            types: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicYear",
             required: true,
         },  
@@ -27,6 +27,6 @@ const yearGroupSchema = new mongoose.Schema(
 
 // model
 // compile
-const YearGroup = mongoose.model(YearGroup, "yearGroupSchema")
+const YearGroup = mongoose.model("yearGroup", yearGroupSchema)
 
 module.exports = YearGroup

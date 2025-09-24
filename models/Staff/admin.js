@@ -20,7 +20,7 @@ const adminSchema = new mongoose.Schema(
             type: String,
             default: "admin",
         },
-        academicTerm: [
+        academicTerms: [
             {
                 type: mongoose.Schema.Types.ObjectId,
                 ref: "AcademicTerm",
@@ -32,10 +32,29 @@ const adminSchema = new mongoose.Schema(
                 ref: "AcademicYear",
             }
         ],
+
+        yearGroups: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "YearGroup",
+            }
+        ],
         classLevel: [
             {
                 type: mongoose.Schema.Types.ObjectId,
                 ref: "ClassLevel",
+            }
+        ],
+        programs: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Program",
+            }
+        ],
+        subjects: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Subject",
             }
         ],
         teachers: [

@@ -97,7 +97,7 @@ exports.updateAcademicYearCtrl = AsyncHandler(async(req, res) => {
 
 exports.deleteAcademicYearCtrl = AsyncHandler(async(req, res) => {
     
-    await AcademicYear.findByIdAndDelete();
+    await AcademicYear.findByIdAndDelete(req.params.id);
 
     res.status(201).json({
         status : "Success",

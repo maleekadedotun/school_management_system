@@ -19,7 +19,7 @@ const academicTermSchema = new mongoose.Schema(
         },
 
         createdBy: {
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",
             required: true,
         },  
@@ -32,6 +32,6 @@ const academicTermSchema = new mongoose.Schema(
 );
 
 // model
-const AcademicTerm = mongoose.model(AcademicTerm, "academicTermSchema")
+const AcademicTerm = mongoose.model("academicTerm", academicTermSchema)
 
 module.exports = AcademicTerm

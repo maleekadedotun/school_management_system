@@ -13,27 +13,34 @@ const SubjectSchema = new mongoose.Schema(
         },
 
         teacher:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Teacher",
         },
 
         academicTerms:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicTerm",
             required: true,
         },
 
         createdBy: {
-            types: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",
             required: true,
         },
 
+        // duration: {
+        //     type: mongoose.Schema.Types.ObjectId,
+        //     required: true,
+        //     default: "3 months",
+        // },  
+        
         duration: {
-            types: Schema.Types.ObjectId,
+            type: String,
             required: true,
             default: "3 months",
-        },    
+        },
+
     },
 
     {
@@ -42,6 +49,6 @@ const SubjectSchema = new mongoose.Schema(
 );
 
 // model
-const Subject = mongoose.model(Subject, "SubjectSchema")
+const Subject = mongoose.model("subject", SubjectSchema)
 
 module.exports = Subject

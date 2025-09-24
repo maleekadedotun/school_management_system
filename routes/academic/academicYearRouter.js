@@ -4,14 +4,14 @@ const isLoggedIn = require("../../middlewares/isLoggedin");
 const isAdmin = require("../../middlewares/isAdmin");
 const academicYearRouter = express.Router();
 
-academicYearRouter.post("/",isLoggedIn, isAdmin, createAcademicYearCtrl);
+// academicYearRouter.post("/",isLoggedIn, isAdmin, createAcademicYearCtrl);
 // academicYearRouter.get("/", isLoggedIn, isAdmin, fetchAcademicYearsCtrl);
 
 // chaining
 academicYearRouter
 .route("/")
-.get(isLoggedIn, isAdmin, createAcademicYearCtrl)
 .post(isLoggedIn, isAdmin, createAcademicYearCtrl)
+.get(isLoggedIn, isAdmin, fetchAcademicYearsCtrl)
 
 
 academicYearRouter

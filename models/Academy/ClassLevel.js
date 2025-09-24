@@ -9,12 +9,12 @@ const classLevelSchema = new mongoose.Schema(
         },
 
         description: {
-            types: String,
-            
+            type: String,
+            required: true,
         },  
 
         createdBy: {
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",
             required: true,
         },  
@@ -23,7 +23,7 @@ const classLevelSchema = new mongoose.Schema(
 
         students:[
             {
-                type: Schema.Types.ObjectId,
+                type: mongoose.Schema.Types.ObjectId,
                 ref: "Student",
             },  
         ],
@@ -32,14 +32,14 @@ const classLevelSchema = new mongoose.Schema(
 
         subjects:[
             {
-                type: Schema.Types.ObjectId,
+                type: mongoose.Schema.Types.ObjectId,
                 ref: "Subject",
             },  
         ],
 
         teachers:[
             {
-                type: Schema.Types.ObjectId,
+                type: mongoose.Schema.Types.ObjectId,
                 ref: "Teacher",
             },  
         ]
