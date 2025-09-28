@@ -168,6 +168,7 @@ exports.updateAdminCtrl = AsyncHandler(async(req,res) => {
     // })
  
 });
+
 //@desc delete admin
 //@route DELETE /api/v1/admin/delete/:id
 //@access private

@@ -59,9 +59,9 @@ const teacherSchema = new mongoose.Schema(
         },
 
         subject:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "SUbject",
-            required: true
+            // required: true
         },
 
         applicationStatus:{
@@ -71,38 +71,30 @@ const teacherSchema = new mongoose.Schema(
         },
 
         program:{
-            type: Schema.Types.ObjectId,
-            ref: "Program",
-            required: true,
+            type: String,
         },
 
         classLevel:{
-            type: Schema.Types.ObjectId,
-            ref: "ClassLevel",
-            required: true,
+            type: String,
         },
 
         academicYear:{
-            type: Schema.Types.ObjectId,
-            ref: "AcademicYear",
-            required: true,
+            type: String,
         },
 
-        examsCreated:{
-            type: Schema.Types.ObjectId,
+        examsCreated:[{
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Exam",
-        },
+        }],
         
         createdBy:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",
-            required: true,
+            // required: true,
         },
 
         academicTerm:{
-            type: Schema.Types.ObjectId,
-            ref: "AcademicTerm",
-            required: true,
+            type: String,
         },
         
     },
@@ -114,6 +106,6 @@ const teacherSchema = new mongoose.Schema(
 
 // model
 // compile
-const Teacher = mongoose.model(Teacher, "teacherSchema")
+const Teacher = mongoose.model("teacher", teacherSchema)
 
 module.exports = Teacher
