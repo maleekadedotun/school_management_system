@@ -72,6 +72,6 @@ const programSchema = new mongoose.Schema(
 );
 
 // model
-const Program = mongoose.model("program", programSchema)
+const Program = mongoose.model("Program", programSchema)
 
 module.exports = Program

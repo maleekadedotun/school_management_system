@@ -32,6 +32,6 @@ const academicTermSchema = new mongoose.Schema(
 );
 
 // model
-const AcademicTerm = mongoose.model("academicTerm", academicTermSchema)
+const AcademicTerm = mongoose.model("AcademicTerm", academicTermSchema)
 
 module.exports = AcademicTerm

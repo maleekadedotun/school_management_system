@@ -27,6 +27,6 @@ const yearGroupSchema = new mongoose.Schema(
 
 // model
 // compile
-const YearGroup = mongoose.model("yearGroup", yearGroupSchema)
+const YearGroup = mongoose.model("YearGroup", yearGroupSchema)
 
 module.exports = YearGroup

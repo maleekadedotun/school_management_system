@@ -93,6 +93,6 @@ const examResultsSchema = new mongoose.Schema(
 
 // model
 // compile
-const ExamResults = mongoose.model(ExamResults, "examResultsSchema")
+const ExamResults = mongoose.model("ExamResult", examResultsSchema)
 
 module.exports = ExamResults;

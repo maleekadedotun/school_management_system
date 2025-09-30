@@ -13,13 +13,13 @@ const examSchema = new mongoose.Schema(
         },
 
         subject:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Subject",
             required: true,
         },
 
         program:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Program",
             required: true,
         },
@@ -37,7 +37,7 @@ const examSchema = new mongoose.Schema(
         },
 
         academicTerm:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicTerm",
             required: true,
         },
@@ -51,6 +51,7 @@ const examSchema = new mongoose.Schema(
         examDate:{
             type: Date,
             required: true,
+            default: new Date(),
         },
 
         examTime:{
@@ -67,31 +68,31 @@ const examSchema = new mongoose.Schema(
         examStatus:{
             type: String,
             required: true,
-            default: "Pending",
+            default: "pending",
             enum: ["pending", "live"],
         },
 
         questions:[
             {
-                type: Schema.Types.ObjectId,
+                type: mongoose.Schema.Types.ObjectId,
                 ref: "Question",
             },
         ],
 
         classLevel: {
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "ClassLevel",
             required: true,
         },
 
         createdBy: {
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Teacher",
             required: true,
         },
 
         academicYear: {
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicYear",
             required: true,
         },
@@ -105,6 +106,6 @@ const examSchema = new mongoose.Schema(
 
 // model
 // compile
-const Exam = mongoose.model(Exam, "examSchema")
+const Exam = mongoose.model("Exam", examSchema)
 
 module.exports = Exam;
