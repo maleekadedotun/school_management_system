@@ -34,6 +34,7 @@ const studentSchema = new mongoose.Schema(
                 )
             }
         },
+
         // if withdrawn, the student will not be able to login
         isWithDrawn:{
             type: Boolean,
@@ -53,12 +54,27 @@ const studentSchema = new mongoose.Schema(
 
         // class are from level 1-6
         // Keep track of the class level the student is in
+        // classLevel: [{
+        //     type: mongoose.Schema.Types.ObjectId,
+        //     ref: "ClassLevel",
+        // }],
 
-        classLevel:{
-            type: Schema.Types.ObjectId,
-            ref: "ClassLevel",
-            required: true,
-        },
+        // currentClassLevel: {
+        //     type: mongoose.Schema.Types.ObjectId,
+        //     ref: "ClassLevel",
+        //     default: function () {
+        //         return this.classLevel.length > 0 
+        //             ? this.classLevel[this.classLevel.length - 1] 
+        //             : null;
+        //     }
+        // },
+
+        classLevels:[
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "ClassLevel",
+            }
+        ],
 
         currentClassLevel: {
             type: String,
@@ -67,10 +83,12 @@ const studentSchema = new mongoose.Schema(
             }
         },
 
+        
+
         academicYear:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicYear",
-            required: true,
+            // required: true,
         },
 
         dateAdmitted:{
@@ -79,22 +97,22 @@ const studentSchema = new mongoose.Schema(
         },
 
         academicYear:{
-            type: Schema.isPromotedToLevel200ypes.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicYear",
-            required: true,
+            // required: true,
         },
 
         examsResults:[
             {
-            type: Schema.Types.ObjectId,
-            ref: "ExamResults",
-        },
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "ExamResults",
+            },
         ],
 
-          program:{
-            type: Schema.Types.ObjectId,
+        program:{
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Program",
-            required: true,
+            // required: true,
         },
 
         isPromotedToLevel200:{
@@ -112,7 +130,7 @@ const studentSchema = new mongoose.Schema(
             default: false,
         },
 
-          isGraduated:{
+        isGraduated:{
             type: Boolean,
             default: false,
         },
