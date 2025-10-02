@@ -74,7 +74,12 @@ exports.createExamCtrl = AsyncHandler(async(req, res) =>{
 //@access teacher only
 
 exports.fetchAllExamsCtrl = AsyncHandler(async(req, res) => {
-    const exams = await Exam.find()
+    const exams = await Exam.find().populate({
+        path: "questions",
+        populate: {
+            path: "createdBy"
+        }
+    });
     res.status(200).json({
         status: "Success",
         message: "Exams fetched successfully",

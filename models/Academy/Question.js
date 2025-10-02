@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const questionSchema = new mongoose.Schema(
     {
-        name:{
+        question:{
             type: String,
             required: true,
         },
@@ -34,11 +34,11 @@ const questionSchema = new mongoose.Schema(
 
         isCorrect: {
             type: Boolean,
-            required: true,
+            default: false,
         },
 
         createdBy: {
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Teacher",
             required: true,
         },

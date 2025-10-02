@@ -106,7 +106,7 @@ const teacherSchema = new mongoose.Schema(
 
 // model
 // compile
-const Teacher = mongoose.model("teacher", teacherSchema)
+const Teacher = mongoose.model("Teacher", teacherSchema)
 
 module.exports = Teacher
 
