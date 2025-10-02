@@ -1,7 +1,7 @@
 const express = require("express");
 const isLoggedIn = require("../../middlewares/isLoggedin");
 const isAdmin = require("../../middlewares/isAdmin");
-const { adminRegisterStudent, studentLogin, fetchStudentProfile, fetchAllStudentsAdmin, fetchStudentAdmin, updateStudentCtrl } = require("../../controller/student/studentCtrl");
+const { adminRegisterStudent, studentLogin, fetchStudentProfile, fetchAllStudentsAdmin, fetchStudentAdmin, updateStudentCtrl, adminUpdateStudentCtrl } = require("../../controller/student/studentCtrl");
 const isStudentLogin = require("../../middlewares/isStudentLogin");
 const isStudent = require("../../middlewares/isStudent");
 
@@ -15,6 +15,7 @@ studentRoute.get("/admin", isLoggedIn, isAdmin, fetchAllStudentsAdmin);
 studentRoute.get("/:studentID/admin", isLoggedIn, isAdmin, fetchStudentAdmin);
 studentRoute.put("/profile", isStudentLogin, isStudent, fetchStudentProfile);
 studentRoute.put("/update/", isStudentLogin, isStudent, updateStudentCtrl);
+studentRoute.put("/:studentID/update/admin", isLoggedIn, isAdmin, adminUpdateStudentCtrl);
 
 
 

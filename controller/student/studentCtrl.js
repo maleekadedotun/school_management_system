@@ -154,7 +154,7 @@ exports.updateStudentCtrl = AsyncHandler(async(req,res) => {
 //@route PUT /api/v1/students/:studentID/update/admin
 //@access private Admin only
 
-exports.adminupdatateStudentCtrl = AsyncHandler(async(req, res) => {
+exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
     const {
         name,
         email,
@@ -167,7 +167,8 @@ exports.adminupdatateStudentCtrl = AsyncHandler(async(req, res) => {
     if(!studentFound) {
         throw new Error("Student not found");
     }
-    const student = await Student.findByIdAndUpdate(req.params.studentID, {
+    // update
+    const studentUpdated = await Student.findByIdAndUpdate(req.params.studentID, {
         $set:{
         name,
         email,
@@ -175,6 +176,19 @@ exports.adminupdatateStudentCtrl = AsyncHandler(async(req, res) => {
         academicYear,
         program,
         prefectName,
+        },
+        $addToSet: {
+            classLevels,
         }
+    },
+    {
+        new: true,
+        runValidators: true,
+    });
+    // send response
+    res.status(200).json({
+        status: "Success",
+        message: "Student updated successfully",
+        data: studentUpdated,
     })
 })
