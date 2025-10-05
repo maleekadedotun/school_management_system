@@ -3,6 +3,7 @@ const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
 const generateToken = require("../../utils/generateToken");
 
 const Student = require("../../models/Academy/Student");
+const Exam = require("../../models/Academy/Exam");
 
 //@desc register student
 //@route POST /api/v1/students/admin/register
@@ -191,4 +192,61 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
         message: "Student updated successfully",
         data: studentUpdated,
     })
+});
+
+//@desc   Student taking exam
+//@route PUT /api/v1/students/exams/:examID/write
+//@access Student Admin only
+
+exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
+    // res.json("Taking");
+    // get student
+    const studentFound = await Student.findById(req.userAuth.id);
+    if (!studentFound) {
+        throw new Error("Student not found");
+    }
+    // get examID
+    const examFound = await Exam.findById(req.params.examID).populate("questions");
+    if (!examFound) {
+        throw new Error("Exam not found");
+        
+    }
+    // console.log({
+    //     studentFound, examFound
+    // });
+    // get question
+    const questions = examFound?.questions
+    // get student answer
+    const studentAnswers = req.body.answers;
+    // Build report object
+    let correctAnswers = 0;
+    let wrongAnswers = 0;
+    let totalQuestions = 0;
+    let grade = 0;
+    let score = 0;
+    let answeredQuestions = [];
+
+    // check for answers
+    for (let i = 0; i < questions.length; i++) {
+        // find question
+        const question = questions[i];
+        // console.log(question);
+        // check if the answer is correct
+        if (question.correctAnswer === studentAnswers[i]) {
+            correctAnswers++;
+            score++;
+            question.isCorrect = true;
+        }
+        else{
+            wrongAnswers++;
+        }
+        
+    }
+    
+    res.status(200).json({
+        status: "Success",
+        data: questions,
+        studentAnswers,
+    })
+    
 })
