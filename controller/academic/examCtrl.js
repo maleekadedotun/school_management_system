@@ -78,7 +78,7 @@ exports.fetchAllExamsCtrl = AsyncHandler(async(req, res) => {
         path: "questions",
         populate: {
             path: "createdBy"
-        }
+        },
     });
     res.status(200).json({
         status: "Success",
@@ -87,8 +87,8 @@ exports.fetchAllExamsCtrl = AsyncHandler(async(req, res) => {
     })
 });
 
-//@desc  GET all exams
-//@route POST /api/v1/exams
+//@desc  GET single exams
+//@route POST /api/v1/exams/:id
 //@access teacher only
 
 exports.fetchExamCtrl = AsyncHandler(async(req, res) => {
@@ -103,7 +103,7 @@ exports.fetchExamCtrl = AsyncHandler(async(req, res) => {
 });
 
 //@desc update exam
-//@route PUT /api/v1/exams/:id
+//@route PUT /api/v1/exams//:id/update/teacher
 //@access private
 
 exports.updateExamCtrl = AsyncHandler(async(req, res) => {

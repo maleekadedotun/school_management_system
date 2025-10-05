@@ -70,7 +70,7 @@ exports.updateProgramCtrl = AsyncHandler(async(req, res) => {
     // check if already exist
     const programFound = await Program.findOne({name});
     if (programFound) {
-        throw new Error("Class level already exist");
+        throw new Error("Program already exist");
     }
     const program = await Program.findByIdAndUpdate(req.params.id,
         {
