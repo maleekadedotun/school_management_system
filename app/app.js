@@ -65,13 +65,27 @@ app.use("/api/v1/exam-results", checkExamResultsRouter);
 
 
 // ✅ root route
-app.get("/", (req, res) => {
-  res.status(200).json({
-    status: "Success",
-    message: "Welcome to the School Management System API 🚀",
-    data: Student,
-  });
-});
+// app.get("/", (req, res) => {
+//   res.status(200).json({
+//     status: "Success",
+//     message: "Welcome to the School Management System API 🚀",
+//     data: Student,
+//   });
+// });
+
+app.get("/", async(req, res) => {
+    const students = await Student.find()
+    try{
+        res.json({
+            status: "Success",
+            data: students
+        })
+    }
+    catch (error) {
+        res.json(error)
+    }
+})
+
 // error middleware
 app.use(notFoundErr)
 app.use(globalErrorHandler)
