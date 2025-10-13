@@ -24,4 +24,4 @@ studentRoute.put("/:studentID/update/admin", isAuthenticated(Admin), roleRestric
 
 
 
-module.exports = studentRoute
+module.exports = studentRoute;
