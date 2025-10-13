@@ -62,6 +62,14 @@ app.use("/api/v1/students", studentRoute);
 app.use("/api/v1/questions", questionRouter);
 app.use("/api/v1/exam-results", checkExamResultsRouter);
 
+
+// ✅ root route
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "Success",
+    message: "Welcome to the School Management System API 🚀",
+  });
+});
 // error middleware
 app.use(notFoundErr)
 app.use(globalErrorHandler)
