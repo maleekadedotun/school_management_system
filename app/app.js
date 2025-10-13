@@ -13,6 +13,7 @@ const examRouter = require("../routes/academic/examRouter");
 const studentRoute = require("../routes/student/studentRouter");
 const questionRouter = require("../routes/question/questionRouter");
 const checkExamResultsRouter = require("../routes/academic/checkExamResultRouter");
+const Student = require("../models/Academy/Student");
 // const academicTermRouter = require("../routes/academic/academicTermRouter");
 
 const app = express();
@@ -68,6 +69,7 @@ app.get("/", (req, res) => {
   res.status(200).json({
     status: "Success",
     message: "Welcome to the School Management System API 🚀",
+    data: Student,
   });
 });
 // error middleware
