@@ -2,6 +2,7 @@ const AsyncHandler = require("express-async-handler");
 const Teacher = require("../../models/Staff/Teacher");
 const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
 const generateToken = require("../../utils/generateToken");
+const Admin = require("../../models/Staff/admin");
 // const Admin = require("../../models/Staff/admin");
 
 //@desc register teacher
@@ -9,6 +10,11 @@ const generateToken = require("../../utils/generateToken");
 //@access private
 
 exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
+    // find admin
+    const adminFound = await Admin.findById(req.userAuth._id)
+    if (!adminFound) {
+        throw new Error("Admin not found")
+    }
     const {name, password, email} = req.body
     const teacher = await Teacher.findOne({email})
     if (teacher) {
@@ -21,6 +27,11 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
         email,
         password: hashPassword,
     });
+    // teacher to admin
+    adminFound.teachers.push(teacherCreated?._id);
+    // save
+    await adminFound.save()
+    
     res.status(201).json({
         status: "Success",
         message: "Teacher created successfully",
@@ -60,12 +71,15 @@ exports.teacherLogin = AsyncHandler(async(req, res) => {
 //@access public admin only
 
 exports.fetchAllTeachersAdmin = AsyncHandler(async(req, res) =>{
-    const teachers = await Teacher.find();
-    res.status(201).json({
-        status: "Success",
-        message: "Teachers fetched successfully",
-        data: teachers
-    })
+    res.status(200).json(res.results);
+    // console.log(res.results);;
+    
+    // // query string
+    // const query = req.query;
+    // // params/:id
+    // const params = req.params;
+    // console.log(query);
+   
 });
 
 //@desc single teacher

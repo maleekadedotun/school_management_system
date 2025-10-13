@@ -2,14 +2,13 @@ const mongoose = require("mongoose");
 
 const examResultsSchema = new mongoose.Schema(
     {
-        student:{
-            type: Schema.Types.ObjectId,
-            ref: "Student",
+        studentID:{
+            type: String,
             required: true,
         },
 
         exam:{
-            type: Schema.Types.ObjectId,
+            type: mongoose.Schema.Types.ObjectId,
             ref: "Exam",
             required: true,
         },
@@ -19,11 +18,11 @@ const examResultsSchema = new mongoose.Schema(
             required: true,
         },
 
-        program:{
-            type: Schema.Types.ObjectId,
-            ref: "Program",
-            required: true,
-        },
+        // program:{
+        //     type: mongoose.Schema.Types.ObjectId,
+        //     ref: "Program",
+        //     required: true,
+        // },
 
         score:{
             type: Number,
@@ -35,12 +34,17 @@ const examResultsSchema = new mongoose.Schema(
             required: true,
             default: 50,
         },
+        answeredQuestions: [
+            {
+                type: Object,
+            }
+        ],
 
         status:{
             type: String,
             required: true,
-            enum: ["failed", "passed"],
-            default: "failed",
+            enum: ["Failed", "Passed"],
+            default: "Failed",
         },
 
         // Excellent/Good/Poor
@@ -52,15 +56,15 @@ const examResultsSchema = new mongoose.Schema(
             default: "Poor",
         },
 
-        position:{
-            type: Number,
-            required: true,
-        },
+        // position:{
+        //     type: Number,
+        //     required: true,
+        // },
 
-        subject:{
-            type: String,
-            ref: "Subject",
-        },
+        // subject:{
+        //     type: String,
+        //     ref: "Subject",
+        // },
 
         classLevel:{
             type: mongoose.Schema.Types.ObjectId,
@@ -73,7 +77,7 @@ const examResultsSchema = new mongoose.Schema(
             required: true,
         },
 
-        academicTear:{
+        academicYear:{
             type: mongoose.Schema.Types.ObjectId,
             ref: "AcademicYear",
             required: true,
@@ -93,6 +97,6 @@ const examResultsSchema = new mongoose.Schema(
 
 // model
 // compile
-const ExamResults = mongoose.model("ExamResult", examResultsSchema)
+const ExamResults = mongoose.model("ExamResults", examResultsSchema)
 
 module.exports = ExamResults;

@@ -1,7 +1,9 @@
 const express = require("express");
-const isLoggedIn = require("../../middlewares/isLoggedin");
+// const isLoggedIn = require("../../middlewares/isLoggedin");
 const isAdmin = require("../../middlewares/isAdmin");
 const { createProgramCtrl, fetchProgramsCtrl, fetchProgramCtrl, updateProgramCtrl, deleteProgramCtrl } = require("../../controller/academic/programCtrl");
+const isAuthenticated = require("../../middlewares/isAuthenticated");
+const Admin = require("../../models/Staff/admin");
 const programRouter = express.Router();
 
 // academicYearRouter.post("/",isLoggedIn, isAdmin, createAcademicYearCtrl);
@@ -10,15 +12,15 @@ const programRouter = express.Router();
 // chaining
 programRouter
 .route("/")
-.post(isLoggedIn, isAdmin, createProgramCtrl)
-.get(isLoggedIn, isAdmin, fetchProgramsCtrl)
+.post(isAuthenticated(Admin), isAdmin, createProgramCtrl)
+.get(isAuthenticated(Admin), isAdmin, fetchProgramsCtrl)
 
 
 programRouter
 .route("/:id")
-.get(isLoggedIn, isAdmin, fetchProgramCtrl)
-.put(isLoggedIn, isAdmin, updateProgramCtrl)
-.delete(isLoggedIn, isAdmin, deleteProgramCtrl)
+.get(isAuthenticated(Admin), isAdmin, fetchProgramCtrl)
+.put(isAuthenticated(Admin), isAdmin, updateProgramCtrl)
+.delete(isAuthenticated(Admin), isAdmin, deleteProgramCtrl)
 
 // programRouter.get("/:id",isLoggedIn, isAdmin, fetchAcademicYearCtrl);
 // programRouter.put("/:id", isLoggedIn, isAdmin, updateAcademicYearCtrl);

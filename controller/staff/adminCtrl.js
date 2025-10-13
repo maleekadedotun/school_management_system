@@ -80,12 +80,8 @@ exports.adminLoginCtrl =  AsyncHandler(async(req, res) => {
 //@route GET /api/v1/admin/
 //@access private
 exports.getAllAdminCtrl = AsyncHandler( async(req,res) => {
-    const admins = await Admin.find();
-    res.status(200).json({
-        status: "Success",
-        message: "Admins fetched successfully",
-        data: admins,
-    })
+    // const admins = await Admin.find();
+    res.status(200).json(res.results)
 })
 
 //@desc single admin
@@ -93,7 +89,12 @@ exports.getAllAdminCtrl = AsyncHandler( async(req,res) => {
 //@access private
 exports.getAdminProfileCtrl = AsyncHandler( async(req,res) => {
 //    console.log(req.userAuth);
-   const admin = await Admin.findById(req.userAuth._id).select("-password -createdAt -updatedAt").populate("academicYears");   
+   const admin = await Admin.findById(req.userAuth._id).select("-password -createdAt -updatedAt")
+   .populate("academicYears")
+   .populate("academicTerms") 
+   .populate("yearGroups") 
+   .populate("classLevel") 
+   .populate("programs").populate("students");
    if (!admin) {
         throw new Error("Not an admin")
    }

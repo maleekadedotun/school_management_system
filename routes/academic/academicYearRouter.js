@@ -1,7 +1,9 @@
 const express = require("express");
 const { createAcademicYearCtrl, fetchAcademicYearsCtrl, fetchAcademicYearCtrl, updateAcademicYearCtrl, deleteAcademicYearCtrl } = require("../../controller/academic/academicYearCtrl");
-const isLoggedIn = require("../../middlewares/isLoggedin");
+// const isLoggedIn = require("../../middlewares/isLoggedin");
 const isAdmin = require("../../middlewares/isAdmin");
+const isAuthenticated = require("../../middlewares/isAuthenticated");
+const Admin = require("../../models/Staff/admin");
 const academicYearRouter = express.Router();
 
 // academicYearRouter.post("/",isLoggedIn, isAdmin, createAcademicYearCtrl);
@@ -10,15 +12,15 @@ const academicYearRouter = express.Router();
 // chaining
 academicYearRouter
 .route("/")
-.post(isLoggedIn, isAdmin, createAcademicYearCtrl)
-.get(isLoggedIn, isAdmin, fetchAcademicYearsCtrl)
+.post(isAuthenticated(Admin), isAdmin, createAcademicYearCtrl)
+.get(isAuthenticated(Admin), isAdmin, fetchAcademicYearsCtrl)
 
 
 academicYearRouter
 .route("/:id")
-.get(isLoggedIn, isAdmin, fetchAcademicYearCtrl)
-.put(isLoggedIn, isAdmin, updateAcademicYearCtrl)
-.delete(isLoggedIn, isAdmin, deleteAcademicYearCtrl)
+.get(isAuthenticated(Admin), isAdmin, fetchAcademicYearCtrl)
+.put(isAuthenticated(Admin), isAdmin, updateAcademicYearCtrl)
+.delete(isAuthenticated(Admin), isAdmin, deleteAcademicYearCtrl)
 
 // academicYearRouter.get("/:id",isLoggedIn, isAdmin, fetchAcademicYearCtrl);
 // academicYearRouter.put("/:id", isLoggedIn, isAdmin, updateAcademicYearCtrl);

@@ -4,6 +4,8 @@ const generateToken = require("../../utils/generateToken");
 
 const Student = require("../../models/Academy/Student");
 const Exam = require("../../models/Academy/Exam");
+const ExamResults = require("../../models/Academy/ExamResults");
+const Admin = require("../../models/Staff/admin");
 
 //@desc register student
 //@route POST /api/v1/students/admin/register
@@ -11,6 +13,11 @@ const Exam = require("../../models/Academy/Exam");
 
 exports.adminRegisterStudent = AsyncHandler(async(req, res) => {
     const {name, password, email} = req.body
+    // find admin
+    const adminFound = await Admin.findById(req.userAuth._id)
+    if (!adminFound) {
+        throw new Error("Admin not found")
+    }
     const student = await Student.findOne({email})
     if (student) {
         throw new Error("Student already exist");
@@ -22,6 +29,12 @@ exports.adminRegisterStudent = AsyncHandler(async(req, res) => {
         email,
         password: hashPassword,
     });
+
+    // teacher to admin
+    adminFound.students.push(studentCreated?._id);
+    // save
+    await adminFound.save()
+
     res.status(201).json({
         status: "Success",
         message: "Student created successfully",
@@ -61,14 +74,41 @@ exports.studentLogin = AsyncHandler(async(req, res) => {
 //@access public student only
 
 exports.fetchStudentProfile = AsyncHandler(async(req, res) =>{
-    const student = await Student.findById(req.userAuth?.id).select("-password -createdAt -updatedAt");
+    const student = await Student.findById(req.userAuth?.id)
+    .select("-password -createdAt -updatedAt")
+    .populate("examsResults");
     if (!student) {
         throw new Error("Student not found")
     }
+
+    // get student profile
+    const studentProfile = {
+        name: student?.name,
+        email: student?.email,
+        currentClassLevel: student?.currentClassLevel,
+        program: student?.program,
+        dateAdmitted: student?.dateAdmitted,
+        isSuspended: student?.isSuspended,
+        isWithDrawn: student?.isWithDrawn,
+        studentId: student?.StudentId,
+        prefectName: student?.prefectName,
+    };
+
+    // get student exam results
+    const examResults = student?.examsResults;
+    // current exam results
+    const currentExamResult = examResults[examResults.length -1];
+    // check if exam is published
+    const isPublished = currentExamResult?.isPublished
+    // console.log(currentExamResult);
+    
     res.status(201).json({
         status: "Success",
         message: "Student profile fetched successfully",
-        data: student,
+        data: {
+            studentProfile,
+            currentExamResult: isPublished ? currentExamResult : []
+        }
     })
 });
 
@@ -163,6 +203,8 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
         academicYear,
         program,
         prefectName,
+        isSuspended,
+        isWithDrawn,
     } = req.body;
     const studentFound = await Student.findById(req.params.studentID);
     if(!studentFound) {
@@ -171,12 +213,14 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
     // update
     const studentUpdated = await Student.findByIdAndUpdate(req.params.studentID, {
         $set:{
-        name,
-        email,
-        // classLevels,
-        academicYear,
-        program,
-        prefectName,
+            name,
+            email,
+            // classLevels,
+            academicYear,
+            program,
+            prefectName,
+            isSuspended,
+            isWithDrawn,
         },
         $addToSet: {
             classLevels,
@@ -206,7 +250,9 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
         throw new Error("Student not found");
     }
     // get examID
-    const examFound = await Exam.findById(req.params.examID).populate("questions");
+    const examFound = await Exam.findById(req.params.examID).populate("questions").populate("academicTerm");
+    console.log(examFound);
+    
     if (!examFound) {
         throw new Error("Exam not found");
         
@@ -218,10 +264,27 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
     const questions = examFound?.questions
     // get student answer
     const studentAnswers = req.body.answers;
+
+    // check if student answered all questions
+    if (questions.length !== studentAnswers.length) {
+        throw new Error("You must answer all questions")
+    }
+    const studentFoundResults = await ExamResults.findOne({student: studentFound?._id});
+    if (studentFoundResults) {
+        throw new Error("You have already written this exam")
+    }
+
+    // check id student is suspended/withdrawn
+    if (studentFound.isSuspended || studentFound.isWithDrawn) {
+      throw new Error("You are suspended/withdrawn, you can't take this exam");  
+    }
+
     // Build report object
     let correctAnswers = 0;
     let wrongAnswers = 0;
     let totalQuestions = 0;
+    let status = "" //passed/ failed
+    let remarks = "" // Excelent, very good, good, fair, poor
     let grade = 0;
     let score = 0;
     let answeredQuestions = [];
@@ -231,6 +294,7 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
         // find question
         const question = questions[i];
         // console.log(question);
+
         // check if the answer is correct
         if (question.correctAnswer === studentAnswers[i]) {
             correctAnswers++;
@@ -242,11 +306,110 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
         }
         
     }
+
+    // calculate repport
+    totalQuestions = questions.length;
+    grade = (correctAnswers / totalQuestions) * 100;
+    answeredQuestions = questions.map(question => {
+        return {
+            question: question.question,
+            correctAnswer: question.correctAnswer,
+            isCorrect: question.isCorrect,
+            // answeredQuestions: answeredQuestions,
+        }
+    });
+
+    // calculate status
+    if (grade >= 50) {
+        status = "Passed";
+    }
+    else{
+        status = "Failed";
+    }
     
+    // Remarks
+    if (grade >= 80) {
+        remarks = "Excellent";
+    }
+    else if (grade >= 70) {
+        remarks = "Very Good";
+    } 
+    else if (grade>= 60) {
+        remarks = "Good";
+    }
+    else if (grade >= 50) {
+        remarks = "Fair";
+    } else {
+        remarks = "Poor";
+    }
+    // generate results
+    const examResults = await ExamResults.create({
+        studentID: studentFound?.StudentId,
+        exam: examFound?._id,
+        grade,
+        score,
+        status,
+        remarks,
+        classLevel: examFound?.classLevel,
+        academicTerm: examFound?.academicTerm,
+        academicYear: examFound?.academicYear,
+        answeredQuestions: answeredQuestions,
+    })
+    // push the results
+    studentFound.examsResults.push(examResults?._id);
+    // save report to student
+    await studentFound.save();
+
+    // promote
+    // promot student to level 200
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
+        studentFound.currentClassLevel === "Level 100") {
+        studentFound.classLevels.push("Level 200");
+        studentFound.currentClassLevel = "Level 200";
+        await studentFound.save();
+    }
+    
+    // promot student to level 300
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
+        studentFound.currentClassLevel === "Level 200") {
+        studentFound.classLevels.push("Level 300");
+        studentFound.currentClassLevel = "Level 300";
+        await studentFound.save();
+    }
+
+    // promot student to level 400
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
+        studentFound.currentClassLevel === "Level 300") 
+    {
+        studentFound.classLevels.push("Level 400");
+        studentFound.currentClassLevel = "Level 400";
+        await studentFound.save();
+    }
+    
+    // promote student to graduate
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
+        studentFound.currentClassLevel === "Level 400")
+    {
+        studentFound.isGraduated = true
+        studentFound.yearGraduated = new Date();
+        await studentFound.save();
+    }
+    // send response
     res.status(200).json({
         status: "Success",
-        data: questions,
-        studentAnswers,
+        data: "You have submitted your exam check later for the results",
+        // correctAnswers,
+        // studentFound,
+        // score,
+        // status,
+        // wrongAnswers,
+        // // totalQuestions,
+        // grade,
+        // remarks,
+        // answeredQuestions,
+        // examResults,
+        // data: questions,
+        // studentAnswers,
     })
     
-})
+});

@@ -71,8 +71,7 @@ const studentSchema = new mongoose.Schema(
 
         classLevels:[
             {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: "ClassLevel",
+                type: String,
             }
         ],
 
@@ -153,7 +152,7 @@ const studentSchema = new mongoose.Schema(
 
         // year group
         yearGraduated:{
-            type: String,
+            type: Date,
         },
         
     },
