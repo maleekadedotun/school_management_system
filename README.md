@@ -52,10 +52,25 @@ A robust RESTful API built for a school learning platform that enables users to 
 ## 📂 API Endpoints
 
 ### 🔐 Auth Routes
-- POST `/api/users/register`
-- POST `/api/users/login`
+- POST `/api/admin/register`
+- POST `/api/admin/login`
+- POST `/api/students/login`
+- POST `/api/teachers/login`
 
----
+---  
+## Routes
+`/api/v1/academic-years`
+`/api/v1/academic-terms`
+`/api/v1/class-levels`
+`/api/v1/programs`
+`/api/v1/subjects`
+`/api/v1/years-group`
+`/api/v1/teachers/api/v1/teachers`
+`/api/v1/exams`
+`/api/v1/students`
+`/api/v1/questions`
+`/api/v1/exam-results`
+
 
 ---
 
@@ -65,7 +80,7 @@ https://your-api-link.com
 ---
 
 ## 📂 GitHub Repository
-https://github.com/your-username/school-learning-api
+https://github.com/maleekadedotun/school_management_system.git
 
 ---
 
