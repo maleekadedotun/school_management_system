@@ -47,23 +47,26 @@ exports.teacherLogin = AsyncHandler(async(req, res) => {
     const {email, password} = req.body;
     const teacher = await Teacher.findOne({email});
     if (!teacher) {
-        res.status(404).json("Invalid login credentials")
+        return res.status(401).json({ message: "Invalid login credentials" });
     }
 
     // verify password
     const isMatched = await isPasswordMatched(password, teacher?.password);
     if (!isMatched) {
-        res.status(404).json("Invalid login credentials");
-    }
-    else{
-        res.status(201).json({
-            status: "Success",
-            message: "Teacher loggedIn successfully",
-            data: generateToken(teacher?.id)
-        });
+        return res.status(401).json({ message: "Invalid login credentials" });
     }
 
-  
+    return res.status(200).json({
+        status: "Success",
+        message: "Teacher loggedIn successfully",
+        data: generateToken(teacher?._id),
+        user: {
+            _id: teacher._id,
+            name: teacher.name,
+            email: teacher.email,
+            role: teacher.role || "teacher",
+        }
+    });
 });
 
 //@desc all teacher

@@ -11,14 +11,14 @@ const Admin = require("../../models/Staff/admin");
 //@route POST /api/v1/students/admin/register
 //@access private Admin only
 
-exports.adminRegisterStudent = AsyncHandler(async(req, res) => {
-    const {name, password, email} = req.body
+exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
+    const { name, password, email } = req.body
     // find admin
     const adminFound = await Admin.findById(req.userAuth._id)
     if (!adminFound) {
         throw new Error("Admin not found")
     }
-    const student = await Student.findOne({email})
+    const student = await Student.findOne({ email })
     if (student) {
         throw new Error("Student already exist");
     }
@@ -46,37 +46,72 @@ exports.adminRegisterStudent = AsyncHandler(async(req, res) => {
 //@route POST /api/v1/students/login
 //@access public
 
-exports.studentLogin = AsyncHandler(async(req, res) => {
-    const {email, password} = req.body;
-    const student = await Student.findOne({email});
-    if (!student) {
-        res.status(404).json("Invalid login credentials")
-    }
+// exports.studentLogin = AsyncHandler(async(req, res) => {
+//     const {email, password} = req.body;
+//     const student = await Student.findOne({email});
+//     if (!student) {
+//         res.status(404).json("Invalid login credentials")
+//     }
 
-    // verify password
-    const isMatched = await isPasswordMatched(password, student?.password);
-    if (!isMatched) {
-        res.status(404).json("Invalid login credentials");
-    }
-    else{
-        res.status(201).json({
-            status: "Success",
-            message: "Student loggedIn successfully",
-            data: generateToken(student?.id)
+//     // verify password
+//     const isMatched = await isPasswordMatched(password, student?.password);
+//     if (!isMatched) {
+//         res.status(404).json("Invalid login credentials");
+//     }
+//     else{
+//         res.status(201).json({
+//             status: "Success",
+//             message: "Student loggedIn successfully",
+//             data: generateToken(student?.id)
+//         });
+//     }
+
+
+// });
+
+exports.studentLogin = AsyncHandler(async (req, res) => {
+    const { email, password } = req.body;
+
+    const student = await Student.findOne({ email });
+
+    if (!student) {
+        return res.status(401).json({
+            message: "Invalid login credentials"
         });
     }
 
-  
-});
+    // Verify password
+    const isMatched = await isPasswordMatched(
+        password,
+        student.password
+    );
 
+    if (!isMatched) {
+        return res.status(401).json({
+            message: "Invalid login credentials"
+        });
+    }
+
+    return res.status(200).json({
+        status: "Success",
+        message: "Student loggedIn successfully",
+        data: generateToken(student._id),
+        user: {
+            _id: student._id,
+            name: student.name,
+            email: student.email,
+            role: student.role
+        }
+    });
+});
 //@desc  student profile
 //@route GET /api/v1/teachers/profile
 //@access public student only
 
-exports.fetchStudentProfile = AsyncHandler(async(req, res) =>{
+exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
     const student = await Student.findById(req.userAuth?.id)
-    .select("-password -createdAt -updatedAt")
-    .populate("examsResults");
+        .select("-password -createdAt -updatedAt")
+        .populate("examsResults");
     if (!student) {
         throw new Error("Student not found")
     }
@@ -97,11 +132,11 @@ exports.fetchStudentProfile = AsyncHandler(async(req, res) =>{
     // get student exam results
     const examResults = student?.examsResults;
     // current exam results
-    const currentExamResult = examResults[examResults.length -1];
+    const currentExamResult = examResults[examResults.length - 1];
     // check if exam is published
     const isPublished = currentExamResult?.isPublished
     // console.log(currentExamResult);
-    
+
     res.status(201).json({
         status: "Success",
         message: "Student profile fetched successfully",
@@ -117,11 +152,11 @@ exports.fetchStudentProfile = AsyncHandler(async(req, res) =>{
 //@route GET /api/v1/students/admin/
 //@access public admin only
 
-exports.fetchAllStudentsAdmin = AsyncHandler(async(req, res) =>{
-    const students = await Student.find();
+exports.fetchAllStudentsAdmin = AsyncHandler(async (req, res) => {
+    const students = await Student.find().populate("program");
     res.status(201).json({
         status: "Success",
-        message: "Teachers fetched successfully",
+        message: "Students fetched successfully",
         data: students
     });
 });
@@ -131,7 +166,7 @@ exports.fetchAllStudentsAdmin = AsyncHandler(async(req, res) =>{
 //@route GET /api/v1/students/:studentID/admin/
 //@access public admin only
 
-exports.fetchStudentAdmin = AsyncHandler(async(req, res) =>{
+exports.fetchStudentAdmin = AsyncHandler(async (req, res) => {
     const studentID = req.params.studentID
     const student = await Student.findById(studentID);
     if (!student) {
@@ -148,41 +183,41 @@ exports.fetchStudentAdmin = AsyncHandler(async(req, res) =>{
 //@route PUT /api/v1/students/update
 //@access public student only
 
-exports.updateStudentCtrl = AsyncHandler(async(req,res) => {
-    const {email, password} = req.body;
+exports.updateStudentCtrl = AsyncHandler(async (req, res) => {
+    const { email, password } = req.body;
     // find email
-    const emailExist = await Student.findOne({email});
+    const emailExist = await Student.findOne({ email });
     console.log(emailExist);
-    
+
     if (emailExist) {
         throw new Error("Email is taken/exist")
-    } 
+    }
     // check if password is updating
     if (password) {
         // update
         const student = await Student.findByIdAndUpdate(req.userAuth._id, {
             password: await hashedPassword(password),
             email,
-        }, 
-        {
-            new: true,
-            runValidators: true,
-        });
+        },
+            {
+                new: true,
+                runValidators: true,
+            });
         // res.status(200).json({
         //     status: "Success",
         //     data: student,
         //     message: "Student updated successfully",
         // })
     }
-    else{
+    else {
         // update
         const student = await Student.findByIdAndUpdate(req.userAuth._id, {
             email,
-        }, 
-        {
-            new: true,
-            runValidators: true,
-        });
+        },
+            {
+                new: true,
+                runValidators: true,
+            });
         res.status(200).json({
             status: "Success",
             data: student,
@@ -195,7 +230,7 @@ exports.updateStudentCtrl = AsyncHandler(async(req,res) => {
 //@route PUT /api/v1/students/:studentID/update/admin
 //@access private Admin only
 
-exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
+exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
     const {
         name,
         email,
@@ -207,12 +242,12 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
         isWithDrawn,
     } = req.body;
     const studentFound = await Student.findById(req.params.studentID);
-    if(!studentFound) {
+    if (!studentFound) {
         throw new Error("Student not found");
     }
     // update
     const studentUpdated = await Student.findByIdAndUpdate(req.params.studentID, {
-        $set:{
+        $set: {
             name,
             email,
             // classLevels,
@@ -226,10 +261,10 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
             classLevels,
         }
     },
-    {
-        new: true,
-        runValidators: true,
-    });
+        {
+            new: true,
+            runValidators: true,
+        });
     // send response
     res.status(200).json({
         status: "Success",
@@ -242,7 +277,7 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async(req, res) => {
 //@route PUT /api/v1/students/exams/:examID/write
 //@access Student Admin only
 
-exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
+exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
     // res.json("Taking");
     // get student
     const studentFound = await Student.findById(req.userAuth.id);
@@ -252,10 +287,10 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
     // get examID
     const examFound = await Exam.findById(req.params.examID).populate("questions").populate("academicTerm");
     console.log(examFound);
-    
+
     if (!examFound) {
         throw new Error("Exam not found");
-        
+
     }
     // console.log({
     //     studentFound, examFound
@@ -269,14 +304,14 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
     if (questions.length !== studentAnswers.length) {
         throw new Error("You must answer all questions")
     }
-    const studentFoundResults = await ExamResults.findOne({student: studentFound?._id});
+    const studentFoundResults = await ExamResults.findOne({ student: studentFound?._id });
     if (studentFoundResults) {
         throw new Error("You have already written this exam")
     }
 
     // check id student is suspended/withdrawn
     if (studentFound.isSuspended || studentFound.isWithDrawn) {
-      throw new Error("You are suspended/withdrawn, you can't take this exam");  
+        throw new Error("You are suspended/withdrawn, you can't take this exam");
     }
 
     // Build report object
@@ -301,10 +336,10 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
             score++;
             question.isCorrect = true;
         }
-        else{
+        else {
             wrongAnswers++;
         }
-        
+
     }
 
     // calculate repport
@@ -323,18 +358,18 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
     if (grade >= 50) {
         status = "Passed";
     }
-    else{
+    else {
         status = "Failed";
     }
-    
+
     // Remarks
     if (grade >= 80) {
         remarks = "Excellent";
     }
     else if (grade >= 70) {
         remarks = "Very Good";
-    } 
-    else if (grade>= 60) {
+    }
+    else if (grade >= 60) {
         remarks = "Good";
     }
     else if (grade >= 50) {
@@ -362,15 +397,15 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
 
     // promote
     // promot student to level 200
-    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" &&
         studentFound.currentClassLevel === "Level 100") {
         studentFound.classLevels.push("Level 200");
         studentFound.currentClassLevel = "Level 200";
         await studentFound.save();
     }
-    
+
     // promot student to level 300
-    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" &&
         studentFound.currentClassLevel === "Level 200") {
         studentFound.classLevels.push("Level 300");
         studentFound.currentClassLevel = "Level 300";
@@ -378,18 +413,16 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
     }
 
     // promot student to level 400
-    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
-        studentFound.currentClassLevel === "Level 300") 
-    {
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" &&
+        studentFound.currentClassLevel === "Level 300") {
         studentFound.classLevels.push("Level 400");
         studentFound.currentClassLevel = "Level 400";
         await studentFound.save();
     }
-    
+
     // promote student to graduate
-    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" && 
-        studentFound.currentClassLevel === "Level 400")
-    {
+    if (examFound.academicTerm.name === "3rd Term" && status === "Passed" &&
+        studentFound.currentClassLevel === "Level 400") {
         studentFound.isGraduated = true
         studentFound.yearGraduated = new Date();
         await studentFound.save();
@@ -411,5 +444,5 @@ exports.studentWriteExamCtrl = AsyncHandler(async(req, res) => {
         // data: questions,
         // studentAnswers,
     })
-    
+
 });

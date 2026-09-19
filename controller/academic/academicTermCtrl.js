@@ -89,7 +89,7 @@ exports.updateAcademicTermCtrl = AsyncHandler(async(req, res) => {
     const {name, description, duration} = req.body;
     // check if already exist
     const academicTermFoud = await AcademicTerm.findOne({name});
-    if (academicTermFoud) {
+    if (academicTermFoud && academicTermFoud._id.toString() !== req.params.id) {
         throw new Error("Academic term already exist");
     }
     const academicTerm = await AcademicTerm.findByIdAndUpdate(req.params.id,

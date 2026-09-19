@@ -1,33 +1,35 @@
 const verifyToken = require("../utils/verifyToken");
 
 const isAuthenticated = (model) => {
-    return async (req, res, next) => {
-    // isLoggedIn = req.userAuth
-    // console.log(req.userAuth);
-    
-    // if (isLoggedIn) {
-    //     next();
-    // } else {
-    //     const err = new Error("You are not login");
-    //     next();
-    // }
-
-    // get token from headers
-    const headerObj = req.headers
-    const token = headerObj?.authorization?.split(" ")[1];
-    // verified token
-    const verifiedToken = verifyToken(token)
-    if (verifiedToken) {
-    // save user into the req.obj
-    // find the admin
-    const user = await model.findById(verifiedToken.id).select("name email role")   
+  return async (req, res, next) => {
+    try {
+      const headerObj = req.headers;
+      const token = headerObj?.authorization?.split(" ")[1];
+      if (!token) {
+        const err = new Error("No token provided");
+        err.statusCode = 401;
+        return next(err);
+      }
+      const verifiedToken = verifyToken(token);
+      if (verifiedToken) {
+        const user = await model.findById(verifiedToken.id).select("name email role");
+        if (!user) {
+          const err = new Error("User not found / Invalid token");
+          err.statusCode = 401;
+          return next(err);
+        }
         req.userAuth = user;
         next();
-    } else {
+      } else {
         const err = new Error("Token expired/Invalid");
-        next(err)
+        err.statusCode = 401;
+        next(err);
+      }
+    } catch (error) {
+      error.statusCode = 401;
+      next(error);
     }
-}
-}
+  };
+};
 
 module.exports = isAuthenticated;

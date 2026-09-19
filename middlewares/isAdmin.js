@@ -1,19 +1,20 @@
-// import verifyToken from "../utils/verifyToken";
-
 const Admin = require("../models/Staff/admin");
 
-const verifyToken = require("../utils/verifyToken");
-
 const isAdmin = async (req, res, next) => {
-    // find user
-   const userId = req?.userAuth?._id
-   const userFound = await Admin.findById(userId);
-   // check if is an admin
-   if (userFound?.role === "admin") {
-        next();
-   } else {
-        next(new Error("Access Denied, admin only"))
-   }
-}
+  const userId = req?.userAuth?._id;
+  if (!userId) {
+    const err = new Error("Access Denied, admin authentication required");
+    err.statusCode = 401;
+    return next(err);
+  }
+  const userFound = await Admin.findById(userId);
+  if (userFound?.role === "admin") {
+    next();
+  } else {
+    const err = new Error("Access Denied, admin only");
+    err.statusCode = 403;
+    next(err);
+  }
+};
 
 module.exports = isAdmin;

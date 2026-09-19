@@ -15,6 +15,7 @@ const yearGroupSchema = new mongoose.Schema(
 
         academicYear: {
             type: mongoose.Schema.Types.ObjectId,
+            // type: String,
             ref: "AcademicYear",
             required: true,
         },  

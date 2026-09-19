@@ -67,10 +67,10 @@ exports.fetchClassLevelCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.updateClassLevelCtrl = AsyncHandler(async(req, res) => {
-    const {name, description, students, teachers, subjects} = req.body;
+    const {name, description} = req.body;
     // check if already exist
     const classLevelFound = await ClassLevel.findOne({name});
-    if (classLevelFound) {
+    if (classLevelFound && classLevelFound._id.toString() !== req.params.id) {
         throw new Error("Class level already exist");
     }
     const classLevel = await ClassLevel.findByIdAndUpdate(req.params.id,
@@ -97,7 +97,7 @@ exports.updateClassLevelCtrl = AsyncHandler(async(req, res) => {
 
 exports.deleteClassLevelCtrl = AsyncHandler(async(req, res) => {
     
-    await AcademicYear.findByIdAndDelete(req.params.id);
+    await ClassLevel.findByIdAndDelete(req.params.id);
 
     res.status(201).json({
         status : "Success",

@@ -1,7 +1,8 @@
 const express = require("express");
 const morgan = require("morgan");
+const cors = require("cors");
 const adminRouter = require("../routes/staff/adminRouter");
-const {globalErrorHandler, notFoundErr} = require("../middlewares/globalErrorHandler");
+const { globalErrorHandler, notFoundErr } = require("../middlewares/globalErrorHandler");
 const academicYearRouter = require("../routes/academic/academicYearRouter");
 const academicTermRouter = require("../routes/academic/academicTermRouter");
 const classLevelRouter = require("../routes/academic/classLevelRouter");
@@ -20,6 +21,7 @@ const app = express();
 // middlewares
 app.use(morgan("dev"));
 app.use(express.json());
+app.use(cors());
 
 // app.use((req, res, next) =>{
 //     console.log(`${req.method} & ${req.originalUrl}`);
@@ -73,9 +75,9 @@ app.use("/api/v1/exam-results", checkExamResultsRouter);
 //   });
 // });
 
-app.get("/", async(req, res) => {
+app.get("/", async (req, res) => {
     const students = await Student.find()
-    try{
+    try {
         res.json({
             status: "Success",
             data: students

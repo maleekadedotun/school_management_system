@@ -2,27 +2,27 @@ const mongoose = require("mongoose");
 
 const academicYearSchema = new mongoose.Schema(
     {
-        name:{
+        name: {
             type: String,
             required: true,
         },
 
-        fromYear:{
+        fromYear: {
             type: Date,
             required: true,
         },
 
-        toYear:{
+        toYear: {
             type: Date,
             required: true,
         },
 
-        isCurrent:{
+        isCurrent: {
             type: Boolean,
             default: false,
         },
 
-         createdBy:{
+        createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",
             required: true,
@@ -36,9 +36,9 @@ const academicYearSchema = new mongoose.Schema(
         teachers: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Teachers",
-        },    
+        },
     },
-    
+
     {
         timestamps: true,
     }

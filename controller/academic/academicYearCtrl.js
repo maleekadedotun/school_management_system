@@ -69,7 +69,7 @@ exports.updateAcademicYearCtrl = AsyncHandler(async(req, res) => {
     const {name, fromYear, toYear} = req.body;
     // check if already exist
     const academicYearFound = await AcademicYear.findOne({name});
-    if (academicYearFound) {
+    if (academicYearFound && academicYearFound._id.toString() !== req.params.id) {
         throw new Error("Academic year already exist");
     }
     const academicYear = await AcademicYear.findByIdAndUpdate(req.params.id,

@@ -1,36 +1,34 @@
-// import verifyToken from "../utils/verifyToken";
-
+const verifyToken = require("../utils/verifyToken");
 const Admin = require("../models/Staff/admin");
 
-const verifyToken = require("../utils/verifyToken");
+const isLoggedIn = async (req, res, next) => {
+  try {
+    const headerObj = req.headers;
+    const token = headerObj?.authorization?.split(" ")[1];
+    if (!token) {
+      const err = new Error("No token provided");
+      err.statusCode = 401;
+      return next(err);
+    }
+    const verifiedToken = verifyToken(token);
+    if (verifiedToken) {
+      const user = await Admin.findById(verifiedToken.id).select("name email role");
+      if (!user) {
+        const err = new Error("User not found / Invalid token");
+        err.statusCode = 401;
+        return next(err);
+      }
+      req.userAuth = user;
+      next();
+    } else {
+      const err = new Error("Token expired/Invalid");
+      err.statusCode = 401;
+      next(err);
+    }
+  } catch (error) {
+    error.statusCode = 401;
+    next(error);
+  }
+};
 
-const isLoggedIn = 
-// async (req, res, next) => {
-//     // isLoggedIn = req.userAuth
-//     // console.log(req.userAuth);
-    
-//     // if (isLoggedIn) {
-//     //     next();
-//     // } else {
-//     //     const err = new Error("You are not login");
-//     //     next();
-//     // }
-
-//     // get token from headers
-//     const headerObj = req.headers
-//     const token = headerObj?.authorization?.split(" ")[1];
-//     // verified token
-//     const verifiedToken = verifyToken(token)
-//     if (verifiedToken) {
-//     // save user into the req.obj
-//     // find the admin
-//     const user = await Admin.findById(verifiedToken.id).select("name email role")   
-//         req.userAuth = user;
-//         next();
-//     } else {
-//         const err = new Error("Token expired/Invalid");
-//         next(err)
-//     }
-// }
-
-module.exports = isLoggedIn
+module.exports = isLoggedIn;

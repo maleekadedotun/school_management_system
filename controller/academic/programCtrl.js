@@ -66,16 +66,17 @@ exports.fetchProgramCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.updateProgramCtrl = AsyncHandler(async(req, res) => {
-    const {name, description} = req.body;
+    const {name, description, duration} = req.body;
     // check if already exist
     const programFound = await Program.findOne({name});
-    if (programFound) {
+    if (programFound && programFound._id.toString() !== req.params.id) {
         throw new Error("Program already exist");
     }
     const program = await Program.findByIdAndUpdate(req.params.id,
         {
             name,
             description,
+            duration,
             createdBy: req.userAuth._id,
         },
         {

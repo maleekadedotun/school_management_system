@@ -1,6 +1,7 @@
 const AsyncHandler = require("express-async-handler");
 const bcrypt = require("bcryptjs");
 const Admin = require("../../models/Staff/admin");
+const Teacher = require("../../models/Staff/Teacher");
 const generateToken = require("../../utils/generateToken");
 const verifyToken = require("../../utils/verifyToken");
 const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
@@ -188,72 +189,80 @@ exports.deleteAdminCtrl = (req,res) => {
 }
 
 //@desc admin suspend teacher
-//@route PUT /api/v1/admin/suspend/teacher/:id
+//@route PUT /api/v1/admin/teacher/suspend/:id
 //@access private
-exports.adminSuspendTeacherCtrl = (req,res) => {
-    try {
-        res.status(201).json({
-            status: "Success",
-            data: "Admin has suspend teacher"
-        })
-    } catch (error) {
-        res.json({
-            status: "Failed",
-            error: error.message,
-        })
+exports.adminSuspendTeacherCtrl = AsyncHandler(async (req, res) => {
+    const teacher = await Teacher.findByIdAndUpdate(
+        req.params.id,
+        { isSuspended: true },
+        { new: true }
+    );
+    if (!teacher) {
+        throw new Error("Teacher not found");
     }
-}
+    res.status(200).json({
+        status: "Success",
+        message: "Teacher suspended successfully",
+        data: teacher,
+    });
+});
 
 //@desc admin unsuspend teacher
-//@route PUT /api/v1/admin/unsuspend/teacher/:id
+//@route PUT /api/v1/admin/teacher/unsuspend/:id
 //@access private
-exports.adminUnSuspendTeacherCtrl =  (req,res) => {
-    try {
-        res.status(201).json({
-            status: "Success",
-            data: "Admin has unsuspend teacher"
-        })
-    } catch (error) {
-        res.json({
-            status: "Failed",
-            error: error.message,
-        })
+exports.adminUnSuspendTeacherCtrl = AsyncHandler(async (req, res) => {
+    const teacher = await Teacher.findByIdAndUpdate(
+        req.params.id,
+        { isSuspended: false },
+        { new: true }
+    );
+    if (!teacher) {
+        throw new Error("Teacher not found");
     }
-}
+    res.status(200).json({
+        status: "Success",
+        message: "Teacher unsuspended successfully",
+        data: teacher,
+    });
+});
 
 //@desc admin withdraw teacher
-//@route PUT /api/v1/admin/withdraw/teacher/:id
+//@route PUT /api/v1/admin/teacher/withdraw/:id
 //@access private
-exports.adminWithdrawTeacherCtrl = (req,res) => {
-    try {
-        res.status(201).json({
-            status: "Success",
-            data: "Admin has withdraw teacher"
-        })
-    } catch (error) {
-        res.json({
-            status: "Failed",
-            error: error.message,
-        })
+exports.adminWithdrawTeacherCtrl = AsyncHandler(async (req, res) => {
+    const teacher = await Teacher.findByIdAndUpdate(
+        req.params.id,
+        { isWithDrawn: true },
+        { new: true }
+    );
+    if (!teacher) {
+        throw new Error("Teacher not found");
     }
-}
+    res.status(200).json({
+        status: "Success",
+        message: "Teacher withdrawn successfully",
+        data: teacher,
+    });
+});
 
 //@desc admin unwithdraw teacher
-//@route PUT /api/v1/admin/unwithdraw/teacher/:id
+//@route PUT /api/v1/admin/teacher/unwithdraw/:id
 //@access private
-exports.adminUnWithdrawTeacherCtrl = (req,res) => {
-    try {
-        res.status(201).json({
-            status: "Success",
-            data: "Admin has unwithdraw teacher"
-        })
-    } catch (error) {
-        res.json({
-            status: "Failed",
-            error: error.message,
-        })
+exports.adminUnWithdrawTeacherCtrl = AsyncHandler(async (req, res) => {
+    const teacher = await Teacher.findByIdAndUpdate(
+        req.params.id,
+        { isWithDrawn: false },
+        { new: true }
+    );
+    if (!teacher) {
+        throw new Error("Teacher not found");
     }
-}
+    res.status(200).json({
+        status: "Success",
+        message: "Teacher unwithdrawn successfully",
+        data: teacher,
+    });
+});
 
 //@desc admin publish teacher
 //@route PUT /api/v1/admin/publish/exam/:id

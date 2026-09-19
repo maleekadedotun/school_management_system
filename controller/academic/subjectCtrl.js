@@ -74,7 +74,7 @@ exports.updateSubjectCtrl = AsyncHandler(async(req, res) => {
     const {name, description, academicTerms} = req.body;
     // check if already exist
     const subjectFound = await Subject.findOne({name});
-    if (subjectFound) {
+    if (subjectFound && subjectFound._id.toString() !== req.params.id) {
         throw new Error("Subject already exist");
     }
     const subject = await Subject.findByIdAndUpdate(req.params.id,
