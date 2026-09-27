@@ -13,12 +13,12 @@ const classLevelRouter = express.Router();
 classLevelRouter
 .route("/")
 .post(isAuthenticated(Admin), isAdmin, createClassLevelCtrl)
-.get(isAuthenticated(Admin), isAdmin, fetchClassLevelsCtrl)
+.get(fetchClassLevelsCtrl)
 
 
 classLevelRouter
 .route("/:id")
-.get(isAuthenticated(Admin), isAdmin, fetchClassLevelCtrl)
+.get(fetchClassLevelCtrl)
 .put(isAuthenticated(Admin), isAdmin, updateClassLevelCtrl)
 .delete(isAuthenticated(Admin), isAdmin, deleteClassLevelCtrl)
 

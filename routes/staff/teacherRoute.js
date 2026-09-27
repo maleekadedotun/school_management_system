@@ -27,6 +27,8 @@ fetchAllTeachersAdmin);
 
 teacherRoute.get("/profile", isAuthenticated(Teacher), roleRestriction("teacher"), fetchTeacherProfile);
 teacherRoute.get("/:teacherID/admin", isAuthenticated(Admin), roleRestriction("admin"), fetchTeacherAdmin);
+teacherRoute.put("/update/profile", isAuthenticated(Teacher), roleRestriction("teacher"), updateTeacherCtrl);
+teacherRoute.put("/update", isAuthenticated(Teacher), roleRestriction("teacher"), updateTeacherCtrl);
 teacherRoute.put("/:teacherID/update/profile", isAuthenticated(Teacher), roleRestriction("teacher"), updateTeacherCtrl);
 teacherRoute.put("/:teacherID/update/admin", isAuthenticated(Admin), roleRestriction("admin"), adminUpdateTeacherCtrl);
 

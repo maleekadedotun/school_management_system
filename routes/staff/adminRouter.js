@@ -39,10 +39,11 @@ adminRouter.put("/teacher/withdraw/:id", adminWithdrawTeacherCtrl);
 adminRouter.put("/teacher/unwithdraw/:id", adminUnWithdrawTeacherCtrl);
 
 // Admin publishing exam results
-adminRouter.put("/teacher/publish/exam/:id", adminPublishExamResultCtrl);
+adminRouter.put("/teacher/publish/exam/:id", isAuthenticated(Admin), isAdmin, adminPublishExamResultCtrl);
+adminRouter.put("/publish/exam/:id", isAuthenticated(Admin), isAdmin, adminPublishExamResultCtrl);
 
 // Admin unpublishing exam results
-adminRouter.put("/teacher/unpublish/exam/:id", adminUnPublishExamResultCtrl);
-
+adminRouter.put("/teacher/unpublish/exam/:id", isAuthenticated(Admin), isAdmin, adminUnPublishExamResultCtrl);
+adminRouter.put("/unpublish/exam/:id", isAuthenticated(Admin), isAdmin, adminUnPublishExamResultCtrl);
 
 module.exports = adminRouter;

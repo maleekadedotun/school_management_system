@@ -13,12 +13,12 @@ const academicTermRouter = express.Router();
 academicTermRouter
 .route("/")
 .post(isAuthenticated(Admin), isAdmin, createAcademicTermCtrl)
-.get(isAuthenticated(Admin), isAdmin, fetchAcademicTermsCtrl)
+.get(fetchAcademicTermsCtrl)
 
 
 academicTermRouter
 .route("/:id")
-.get(isAuthenticated(Admin), isAdmin, fetchAcademicTermCtrl)
+.get(fetchAcademicTermCtrl)
 .put(isAuthenticated(Admin), isAdmin, updateAcademicTermCtrl)
 .delete(isAuthenticated(Admin), isAdmin, deleteAcademicTermCtrl)
 

@@ -22,6 +22,7 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
         name,
         description,
         academicTerms,
+        program: programFound._id,
         createdBy: req.userAuth._id,
     });
     // push to the program
@@ -41,9 +42,10 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.fetchSubjectsCtrl = AsyncHandler(async(req, res) => {
-    const subjects = await Subject.find();
+    const filter = req.query.program ? { program: req.query.program } : {};
+    const subjects = await Subject.find(filter).populate("program");
 
-    res.status(201).json({
+    res.status(200).json({
         status : "Success",
         message: "Subjects fetched successfully",
         data: subjects,

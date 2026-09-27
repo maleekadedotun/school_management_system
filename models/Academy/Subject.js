@@ -23,6 +23,11 @@ const SubjectSchema = new mongoose.Schema(
             required: true,
         },
 
+        program: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Program",
+        },
+
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Admin",

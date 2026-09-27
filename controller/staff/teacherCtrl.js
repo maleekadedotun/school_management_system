@@ -15,8 +15,8 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
     if (!adminFound) {
         throw new Error("Admin not found")
     }
-    const {name, password, email} = req.body
-    const teacher = await Teacher.findOne({email})
+    const {name, password, email, subject, classLevel, program} = req.body;
+    const teacher = await Teacher.findOne({email});
     if (teacher) {
         throw new Error("teacher already exist");
     }
@@ -26,11 +26,50 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
         name,
         email,
         password: hashPassword,
+        subject,
+        classLevel,
+        program,
     });
     // teacher to admin
     adminFound.teachers.push(teacherCreated?._id);
     // save
-    await adminFound.save()
+    await adminFound.save();
+
+    // Auto-link any existing students with matching subject & class level, or matching subject
+    if (subject) {
+        try {
+            const Student = require("../../models/Academy/Student");
+            const subjectQuery = [
+                { subject: subject },
+                { subject: { $regex: new RegExp(`^${subject.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } }
+            ];
+
+            if (classLevel) {
+                const classDigits = classLevel.toString().match(/\d+/)?.[0];
+                const classQuery = [
+                    { currentClassLevel: classLevel },
+                    { currentClassLevel: { $regex: new RegExp(`^${classLevel.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } },
+                    ...(classDigits ? [{ currentClassLevel: { $regex: new RegExp(`(^|\\b|\\D)${classDigits}(\\D|\\b|$)`, "i") } }] : [])
+                ];
+                await Student.updateMany(
+                    {
+                        $and: [
+                            { $or: subjectQuery },
+                            { $or: classQuery }
+                        ]
+                    },
+                    { $set: { assignedTeacher: teacherCreated._id } }
+                );
+            } else {
+                await Student.updateMany(
+                    { $or: subjectQuery },
+                    { $set: { assignedTeacher: teacherCreated._id } }
+                );
+            }
+        } catch (e) {
+            console.error("Error auto-linking students to new teacher:", e);
+        }
+    }
     
     res.status(201).json({
         status: "Success",
@@ -104,10 +143,11 @@ exports.fetchTeacherAdmin = AsyncHandler(async(req, res) =>{
 
 //@desc  teacher profile
 //@route GET /api/v1/teachers/profile
-//@access public admin only
+//@access public teacher only
 
 exports.fetchTeacherProfile = AsyncHandler(async(req, res) =>{
-    const teacher = await Teacher.findById(req.userAuth?.id).select("-password -createdAt -updatedAt");
+    const teacherId = req.userAuth?._id || req.userAuth?.id || req.userAuth;
+    const teacher = await Teacher.findById(teacherId).select("-password -createdAt -updatedAt");
     if (!teacher) {
         throw new Error("Teacher not found")
     }
@@ -120,7 +160,7 @@ exports.fetchTeacherProfile = AsyncHandler(async(req, res) =>{
 
 //@desc  teacher update profile 
 //@route PUT /api/v1/teacher/:teacherID/update/profile
-//@access public teache only
+//@access public teacher only
 
 exports.updateTeacherCtrl = AsyncHandler(async(req,res) => {
     const {name, email, password} = req.body;
@@ -238,7 +278,7 @@ exports.updateTeacherCtrl = AsyncHandler(async(req,res) => {
 // });
 
 exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
-    const { program, subject, academicYear, classLevel } = req.body;
+    const { name, email, program, subject, academicYear, classLevel } = req.body;
     const teacherFound = await Teacher.findById(req.params.teacherID);
 
     if (!teacherFound) {
@@ -251,19 +291,27 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
 
     let updated = false;
 
-    if (program) {
+    if (name) {
+        teacherFound.name = name;
+        updated = true;
+    }
+    if (email) {
+        teacherFound.email = email;
+        updated = true;
+    }
+    if (program !== undefined) {
         teacherFound.program = program;
         updated = true;
     }
-    if (subject) {
+    if (subject !== undefined) {
         teacherFound.subject = subject;
         updated = true;
     }
-    if (classLevel) {
+    if (classLevel !== undefined) {
         teacherFound.classLevel = classLevel;
         updated = true;
     }
-    if (academicYear) {
+    if (academicYear !== undefined) {
         teacherFound.academicYear = academicYear;
         updated = true;
     }
@@ -276,6 +324,62 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
     }
 
     await teacherFound.save();
+
+    // Link teacher to program if found
+    if (program) {
+        try {
+            const Program = require("../../models/Academy/program");
+            const mongoose = require("mongoose");
+            const query = [
+                { name: program },
+                ...(mongoose.Types.ObjectId.isValid(program) ? [{ _id: program }] : [])
+            ];
+            const progDoc = await Program.findOne({ $or: query });
+            if (progDoc) {
+                await Program.findByIdAndUpdate(progDoc._id, {
+                    $addToSet: { teachers: teacherFound._id }
+                });
+            }
+        } catch (e) {
+            console.error("Error linking teacher to program:", e);
+        }
+    }
+
+    // Auto-link any students matching this teacher's subject and class level, or matching subject
+    if (teacherFound.subject) {
+        try {
+            const Student = require("../../models/Academy/Student");
+            const subjectQuery = [
+                { subject: teacherFound.subject },
+                { subject: { $regex: new RegExp(`^${teacherFound.subject.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } }
+            ];
+
+            if (teacherFound.classLevel) {
+                const classDigits = teacherFound.classLevel.toString().match(/\d+/)?.[0];
+                const classQuery = [
+                    { currentClassLevel: teacherFound.classLevel },
+                    { currentClassLevel: { $regex: new RegExp(`^${teacherFound.classLevel.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } },
+                    ...(classDigits ? [{ currentClassLevel: { $regex: new RegExp(`(^|\\b|\\D)${classDigits}(\\D|\\b|$)`, "i") } }] : [])
+                ];
+                await Student.updateMany(
+                    {
+                        $and: [
+                            { $or: subjectQuery },
+                            { $or: classQuery }
+                        ]
+                    },
+                    { $set: { assignedTeacher: teacherFound._id } }
+                );
+            } else {
+                await Student.updateMany(
+                    { $or: subjectQuery },
+                    { $set: { assignedTeacher: teacherFound._id } }
+                );
+            }
+        } catch (e) {
+            console.error("Error auto-linking students to teacher:", e);
+        }
+    }
 
     res.status(200).json({
         status: "Success",

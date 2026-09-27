@@ -13,12 +13,12 @@ const programRouter = express.Router();
 programRouter
 .route("/")
 .post(isAuthenticated(Admin), isAdmin, createProgramCtrl)
-.get(isAuthenticated(Admin), isAdmin, fetchProgramsCtrl)
+.get(fetchProgramsCtrl)
 
 
 programRouter
 .route("/:id")
-.get(isAuthenticated(Admin), isAdmin, fetchProgramCtrl)
+.get(fetchProgramCtrl)
 .put(isAuthenticated(Admin), isAdmin, updateProgramCtrl)
 .delete(isAuthenticated(Admin), isAdmin, deleteProgramCtrl)
 

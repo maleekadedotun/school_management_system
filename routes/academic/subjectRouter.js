@@ -9,16 +9,13 @@ const subjectRouter = express.Router();
 // academicYearRouter.post("/",isLoggedIn, isAdmin, createAcademicYearCtrl);
 // academicYearRouter.get("/", isLoggedIn, isAdmin, fetchAcademicYearsCtrl);
 subjectRouter.post("/:programID", isAuthenticated(Admin), isAdmin, createSubjectCtrl)
-// chaining
 subjectRouter
 .route("/")
-// .post(isAuthenticated(Admin), isAdmin, createSubjectCtrl)
-.get(isAuthenticated(Admin), isAdmin, fetchSubjectsCtrl)
-
+.get(fetchSubjectsCtrl)
 
 subjectRouter
 .route("/:id")
-.get(isAuthenticated(Admin), isAdmin, fetchSubjectCtrl)
+.get(fetchSubjectCtrl)
 .put(isAuthenticated(Admin), isAdmin, updateSubjectCtrl)
 .delete(isAuthenticated(Admin), isAdmin, deleteSubjectCtrl)
 

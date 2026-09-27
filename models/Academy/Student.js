@@ -82,6 +82,16 @@ const studentSchema = new mongoose.Schema(
             }
         },
 
+        subject: {
+            type: String,
+            ref: "Subject",
+        },
+
+        assignedTeacher: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Teacher",
+        },
+
         
 
         academicYear:{

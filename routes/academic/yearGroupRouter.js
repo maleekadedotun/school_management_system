@@ -12,12 +12,12 @@ const yearGroupRouter = express.Router();
 yearGroupRouter
 .route("/")
 .post(isAuthenticated(Admin), isAdmin, createYearGroupCtrl)
-.get(isAuthenticated(Admin), isAdmin, fetchYearsGroupCtrl)
+.get(fetchYearsGroupCtrl)
 
 
 yearGroupRouter
 .route("/:id")
-.get(isAuthenticated(Admin), isAdmin, fetchYearGroupCtrl)
+.get(fetchYearGroupCtrl)
 .put(isAuthenticated(Admin), isAdmin, updateYearGroupCtrl)
 .delete(isAuthenticated(Admin), isAdmin, deleteYearGroupCtrl)
 

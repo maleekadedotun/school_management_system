@@ -13,12 +13,12 @@ const academicYearRouter = express.Router();
 academicYearRouter
 .route("/")
 .post(isAuthenticated(Admin), isAdmin, createAcademicYearCtrl)
-.get(isAuthenticated(Admin), isAdmin, fetchAcademicYearsCtrl)
+.get(fetchAcademicYearsCtrl)
 
 
 academicYearRouter
 .route("/:id")
-.get(isAuthenticated(Admin), isAdmin, fetchAcademicYearCtrl)
+.get(fetchAcademicYearCtrl)
 .put(isAuthenticated(Admin), isAdmin, updateAcademicYearCtrl)
 .delete(isAuthenticated(Admin), isAdmin, deleteAcademicYearCtrl)
 

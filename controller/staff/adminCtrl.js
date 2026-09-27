@@ -2,6 +2,7 @@ const AsyncHandler = require("express-async-handler");
 const bcrypt = require("bcryptjs");
 const Admin = require("../../models/Staff/admin");
 const Teacher = require("../../models/Staff/Teacher");
+const ExamResult = require("../../models/Academy/ExamResults");
 const generateToken = require("../../utils/generateToken");
 const verifyToken = require("../../utils/verifyToken");
 const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
@@ -264,36 +265,37 @@ exports.adminUnWithdrawTeacherCtrl = AsyncHandler(async (req, res) => {
     });
 });
 
-//@desc admin publish teacher
+//@desc admin publish exam result
 //@route PUT /api/v1/admin/publish/exam/:id
 //@access private
-exports.adminPublishExamResultCtrl = (req,res) => {
-    try {
-        res.status(201).json({
-            status: "Success",
-            data: "Admin publishing exam result"
-        })
-    } catch (error) {
-        res.json({
-            status: "Failed",
-            error: error.message,
-        })
+exports.adminPublishExamResultCtrl = AsyncHandler(async (req, res) => {
+    const examId = req.params.id;
+    // Check if the parameter matches an Exam or an ExamResult
+    let filter = { exam: examId };
+    if (examId.match(/^[0-9a-fA-F]{24}$/)) {
+        filter = { $or: [{ exam: examId }, { _id: examId }] };
     }
-}
+    const updateResult = await ExamResult.updateMany(filter, { isPublished: true });
+    res.status(200).json({
+        status: "Success",
+        message: "Exam results published successfully",
+        data: updateResult,
+    });
+});
 
 //@desc admin unpublish exam result
 //@route PUT /api/v1/admin/unpublish/exam/:id
 //@access private
-exports.adminUnPublishExamResultCtrl =  (req,res) => {
-    try {
-        res.status(201).json({
-            status: "Success",
-            data: "Admin unpublishing exam result"
-        })
-    } catch (error) {
-        res.json({
-            status: "Failed",
-            error: error.message,
-        })
+exports.adminUnPublishExamResultCtrl = AsyncHandler(async (req, res) => {
+    const examId = req.params.id;
+    let filter = { exam: examId };
+    if (examId.match(/^[0-9a-fA-F]{24}$/)) {
+        filter = { $or: [{ exam: examId }, { _id: examId }] };
     }
-}
+    const updateResult = await ExamResult.updateMany(filter, { isPublished: false });
+    res.status(200).json({
+        status: "Success",
+        message: "Exam results unpublished successfully",
+        data: updateResult,
+    });
+});

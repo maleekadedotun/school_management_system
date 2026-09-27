@@ -36,9 +36,9 @@ exports.createProgramCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.fetchProgramsCtrl = AsyncHandler(async(req, res) => {
-    const progarms = await Program.find();
+    const progarms = await Program.find().populate("subjects");
 
-    res.status(201).json({
+    res.status(200).json({
         status : "Success",
         message: "Programs fetched successfully",
         data: progarms,
@@ -52,9 +52,9 @@ exports.fetchProgramsCtrl = AsyncHandler(async(req, res) => {
 exports.fetchProgramCtrl = AsyncHandler(async(req, res) => {
     // console.log(req.params.id, "single");
     
-    const programId = await Program.findById(req.params.id);
+    const programId = await Program.findById(req.params.id).populate("subjects");
 
-    res.status(201).json({
+    res.status(200).json({
         status : "Success",
         message: "academic year fetched successfully",
         data: programId,
