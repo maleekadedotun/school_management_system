@@ -1,4 +1,5 @@
 const AsyncHandler = require("express-async-handler");
+const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const Admin = require("../../models/Staff/admin");
 const Teacher = require("../../models/Staff/Teacher");
@@ -299,3 +300,95 @@ exports.adminUnPublishExamResultCtrl = AsyncHandler(async (req, res) => {
         data: updateResult,
     });
 });
+
+//@desc  admin forgot password (generates reset token)
+//@route POST /api/v1/admin/forgot-password
+//@access public
+exports.adminForgotPasswordCtrl = AsyncHandler(async (req, res) => {
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Please provide your registered administrator email address"
+        });
+    }
+
+    const admin = await Admin.findOne({ email: email.toLowerCase().trim() });
+
+    if (!admin) {
+        return res.status(404).json({
+            status: "failed",
+            message: "No administrator account found with that email address"
+        });
+    }
+
+    // Generate secure random reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+
+    // Token valid for 30 minutes
+    admin.passwordResetToken = hashedToken;
+    admin.passwordResetExpires = Date.now() + 30 * 60 * 1000;
+    await admin.save({ validateBeforeSave: false });
+
+    return res.status(200).json({
+        status: "success",
+        message: "Identity verified. Password reset token generated successfully.",
+        resetToken,
+        admin: {
+            name: admin.name,
+            email: admin.email,
+            role: admin.role || "admin",
+        }
+    });
+});
+
+//@desc  admin reset password
+//@route POST /api/v1/admin/reset-password
+//@route POST /api/v1/admin/reset-password/:token
+//@access public
+exports.adminResetPasswordCtrl = AsyncHandler(async (req, res) => {
+    const token = req.params.token || req.body.token;
+    const { password, email } = req.body;
+
+    if (!password || password.length < 6) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Password is required and must be at least 6 characters long"
+        });
+    }
+
+    let admin = null;
+
+    if (token) {
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+        admin = await Admin.findOne({
+            passwordResetToken: hashedToken,
+            passwordResetExpires: { $gt: Date.now() },
+        });
+    }
+
+    // Fallback: If verifying with email directly
+    if (!admin && email) {
+        admin = await Admin.findOne({ email: email.toLowerCase().trim() });
+    }
+
+    if (!admin) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Invalid or expired password reset request. Please request a new token or verify your details."
+        });
+    }
+
+    // Set new password
+    admin.password = await hashedPassword(password);
+    admin.passwordResetToken = undefined;
+    admin.passwordResetExpires = undefined;
+    await admin.save({ validateBeforeSave: false });
+
+    return res.status(200).json({
+        status: "success",
+        message: "Password reset successful. You can now log in with your new password.",
+    });
+});

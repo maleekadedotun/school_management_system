@@ -43,7 +43,7 @@ ExamRouter.put("/:id/admin-toggle-publish", isAuthenticated(Admin), isAdmin, adm
 ExamRouter.route("/").post(isTeacherLogin, isTeacher, createExamCtrl);
 ExamRouter.route("/").get(fetchAllExamsCtrl);
 ExamRouter.route("/:id").get(fetchExamCtrl);
-ExamRouter.route("/:id").delete(deleteExamCtrl);
+ExamRouter.route("/:id").delete(isTeacherLogin, isTeacher, deleteExamCtrl);
 ExamRouter.route("/:id/update/teacher").put(isTeacherLogin, isTeacher, updateExamCtrl);
 
 module.exports = ExamRouter;

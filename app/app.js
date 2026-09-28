@@ -14,6 +14,7 @@ const examRouter = require("../routes/academic/examRouter");
 const studentRoute = require("../routes/student/studentRouter");
 const questionRouter = require("../routes/question/questionRouter");
 const checkExamResultsRouter = require("../routes/academic/checkExamResultRouter");
+const attendanceRouter = require("../routes/academic/attendanceRouter");
 const Student = require("../models/Academy/Student");
 // const academicTermRouter = require("../routes/academic/academicTermRouter");
 
@@ -21,7 +22,11 @@ const app = express();
 // middlewares
 app.use(morgan("dev"));
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+}));
 
 // app.use((req, res, next) =>{
 //     console.log(`${req.method} & ${req.originalUrl}`);
@@ -53,6 +58,7 @@ app.use(cors());
 // app.use(isLogin, isAdmin)
 // routes
 app.use("/api/v1/admin", adminRouter);
+app.use("/api/v1/admins", adminRouter);
 app.use("/api/v1/academic-years", academicYearRouter);
 app.use("/api/v1/academic-terms", academicTermRouter);
 app.use("/api/v1/class-levels", classLevelRouter);
@@ -64,6 +70,7 @@ app.use("/api/v1/exams", examRouter);
 app.use("/api/v1/students", studentRoute);
 app.use("/api/v1/questions", questionRouter);
 app.use("/api/v1/exam-results", checkExamResultsRouter);
+app.use("/api/v1/attendance", attendanceRouter);
 
 
 // ✅ root route

@@ -96,6 +96,13 @@ const teacherSchema = new mongoose.Schema(
         academicTerm:{
             type: String,
         },
+
+        passwordResetToken: {
+            type: String,
+        },
+        passwordResetExpires: {
+            type: Date,
+        },
         
     },
     

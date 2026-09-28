@@ -87,6 +87,22 @@ const studentSchema = new mongoose.Schema(
             ref: "Subject",
         },
 
+        enrolledSubjects: [
+            {
+                subject: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "Subject",
+                },
+                classLevel: {
+                    type: String,
+                },
+                dateEnrolled: {
+                    type: Date,
+                    default: Date.now,
+                },
+            }
+        ],
+
         assignedTeacher: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Teacher",
@@ -164,7 +180,14 @@ const studentSchema = new mongoose.Schema(
         yearGraduated:{
             type: Date,
         },
-        
+
+        passwordResetToken: {
+            type: String,
+        },
+
+        passwordResetExpires: {
+            type: Date,
+        },
     },
     
     {

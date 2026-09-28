@@ -1,4 +1,5 @@
 const AsyncHandler = require("express-async-handler");
+const crypto = require("crypto");
 const Teacher = require("../../models/Staff/Teacher");
 const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
 const generateToken = require("../../utils/generateToken");
@@ -387,5 +388,105 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
         message: "Teacher updated successfully",
     });
 });
+
+//@desc  teacher forgot password (generates reset token)
+//@route POST /api/v1/teachers/forgot-password
+//@access public
+exports.teacherForgotPasswordCtrl = AsyncHandler(async (req, res) => {
+    const { email, teacherId } = req.body;
+
+    if (!email && !teacherId) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Please provide your registered email address or Teacher ID"
+        });
+    }
+
+    const query = [];
+    if (email) query.push({ email: email.toLowerCase().trim() });
+    if (teacherId) query.push({ teacherId: teacherId.trim() });
+
+    const teacher = await Teacher.findOne({ $or: query });
+
+    if (!teacher) {
+        return res.status(404).json({
+            status: "failed",
+            message: "No teacher account found with the provided details"
+        });
+    }
+
+    // Generate secure random reset token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const hashedToken = crypto.createHash("sha256").update(resetToken).digest("hex");
+
+    // Token valid for 30 minutes
+    teacher.passwordResetToken = hashedToken;
+    teacher.passwordResetExpires = Date.now() + 30 * 60 * 1000;
+    await teacher.save({ validateBeforeSave: false });
+
+    return res.status(200).json({
+        status: "success",
+        message: "Identity verified. Password reset token generated successfully.",
+        resetToken,
+        teacher: {
+            name: teacher.name,
+            email: teacher.email,
+            teacherId: teacher.teacherId,
+        }
+    });
+});
+
+//@desc  teacher reset password
+//@route POST /api/v1/teachers/reset-password
+//@route POST /api/v1/teachers/reset-password/:token
+//@access public
+exports.teacherResetPasswordCtrl = AsyncHandler(async (req, res) => {
+    const token = req.params.token || req.body.token;
+    const { password, email, teacherId } = req.body;
+
+    if (!password || password.length < 6) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Password is required and must be at least 6 characters long"
+        });
+    }
+
+    let teacher = null;
+
+    if (token) {
+        const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+        teacher = await Teacher.findOne({
+            passwordResetToken: hashedToken,
+            passwordResetExpires: { $gt: Date.now() },
+        });
+    }
+
+    // Fallback: If verifying with email and/or teacherId directly
+    if (!teacher && (email || teacherId)) {
+        const query = [];
+        if (email) query.push({ email: email.toLowerCase().trim() });
+        if (teacherId) query.push({ teacherId: teacherId.trim() });
+        teacher = await Teacher.findOne({ $or: query });
+    }
+
+    if (!teacher) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Invalid or expired password reset request. Please request a new token or verify your details."
+        });
+    }
+
+    // Set new password
+    teacher.password = await hashedPassword(password);
+    teacher.passwordResetToken = undefined;
+    teacher.passwordResetExpires = undefined;
+    await teacher.save({ validateBeforeSave: false });
+
+    return res.status(200).json({
+        status: "success",
+        message: "Password reset successful. You can now log in with your new password.",
+    });
+});
+
 
 

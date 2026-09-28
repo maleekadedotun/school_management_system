@@ -34,6 +34,11 @@ const SubjectSchema = new mongoose.Schema(
             required: true,
         },
 
+        classLevel: {
+            type: String,
+            default: "Level 100",
+        },
+
         // duration: {
         //     type: mongoose.Schema.Types.ObjectId,
         //     required: true,

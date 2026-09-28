@@ -1,7 +1,17 @@
 const express = require("express");
 // const isLoggedIn = require("../../middlewares/isLoggedin");
 const isAdmin = require("../../middlewares/isAdmin");
-const { adminRegisterTeacher, teacherLogin, fetchAllTeachersAdmin, fetchTeacherAdmin, fetchTeacherProfile, updateTeacherCtrl, adminUpdateTeacherCtrl } = require("../../controller/staff/teacherCtrl");
+const {
+    adminRegisterTeacher,
+    teacherLogin,
+    teacherForgotPasswordCtrl,
+    teacherResetPasswordCtrl,
+    fetchAllTeachersAdmin,
+    fetchTeacherAdmin,
+    fetchTeacherProfile,
+    updateTeacherCtrl,
+    adminUpdateTeacherCtrl
+} = require("../../controller/staff/teacherCtrl");
 const isTeacherLogin = require("../../middlewares/isTeacherLogin");
 const isTeacher = require("../../middlewares/isTeacher");
 const advanceResults = require("../../middlewares/advanceResults");
@@ -15,6 +25,9 @@ const teacherRoute = express.Router();
 
 teacherRoute.post("/admin/register", isAuthenticated(Admin), isAdmin, adminRegisterTeacher);
 teacherRoute.post("/login", teacherLogin);
+teacherRoute.post("/forgot-password", teacherForgotPasswordCtrl);
+teacherRoute.post("/reset-password", teacherResetPasswordCtrl);
+teacherRoute.post("/reset-password/:token", teacherResetPasswordCtrl);
 
 teacherRoute.get("/admin", isAuthenticated(Admin), isAdmin,
 advanceResults(Teacher, {

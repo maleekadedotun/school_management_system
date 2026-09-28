@@ -68,7 +68,13 @@ const adminSchema = new mongoose.Schema(
                 type: mongoose.Schema.Types.ObjectId,
                 ref: "Student",
             }
-        ]
+        ],
+        passwordResetToken: {
+            type: String,
+        },
+        passwordResetExpires: {
+            type: Date,
+        },
     },
     {
         timestamps: true,

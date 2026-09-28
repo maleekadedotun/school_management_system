@@ -8,7 +8,7 @@ const Program = require("../../models/Academy/program");
 //@route POST /api/v1/subjects/:programID
 //@access private
 exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
-    const {name, description, academicTerms} = req.body;
+    const {name, description, academicTerms, classLevel} = req.body;
      const programFound = await Program.findById(req.params.programID);
     if (!programFound) {
         throw new Error("Program not found")
@@ -22,6 +22,7 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
         name,
         description,
         academicTerms,
+        classLevel: classLevel || "Level 100",
         program: programFound._id,
         createdBy: req.userAuth._id,
     });
@@ -29,6 +30,25 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
     programFound.subjects.push(subjectCreated._id);
     // save
     await programFound.save();
+
+    // Auto-enroll all students assigned to this program into this new subject
+    try {
+        const Student = require("../../models/Academy/Student");
+        await Student.updateMany(
+            { program: programFound._id },
+            {
+                $addToSet: {
+                    enrolledSubjects: {
+                        subject: subjectCreated._id,
+                        classLevel: subjectCreated.classLevel || "Level 100",
+                        dateEnrolled: new Date(),
+                    }
+                }
+            }
+        );
+    } catch (enrollErr) {
+        console.error("Error auto-enrolling students to new program subject:", enrollErr);
+    }
 
     res.status(201).json({
         status : "Success",
@@ -43,7 +63,7 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
 
 exports.fetchSubjectsCtrl = AsyncHandler(async(req, res) => {
     const filter = req.query.program ? { program: req.query.program } : {};
-    const subjects = await Subject.find(filter).populate("program");
+    const subjects = await Subject.find(filter).populate("program academicTerms teacher");
 
     res.status(200).json({
         status : "Success",
@@ -59,7 +79,7 @@ exports.fetchSubjectsCtrl = AsyncHandler(async(req, res) => {
 exports.fetchSubjectCtrl = AsyncHandler(async(req, res) => {
     // console.log(req.params.id, "single");
     
-    const subjectId = await Subject.findById(req.params.id);
+    const subjectId = await Subject.findById(req.params.id).populate("program academicTerms teacher");
 
     res.status(201).json({
         status : "Success",
@@ -73,19 +93,23 @@ exports.fetchSubjectCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.updateSubjectCtrl = AsyncHandler(async(req, res) => {
-    const {name, description, academicTerms} = req.body;
+    const {name, description, academicTerms, classLevel} = req.body;
     // check if already exist
     const subjectFound = await Subject.findOne({name});
     if (subjectFound && subjectFound._id.toString() !== req.params.id) {
         throw new Error("Subject already exist");
     }
+    const updatePayload = {
+        name,
+        description,
+        academicTerms,
+        createdBy: req.userAuth._id,
+    };
+    if (classLevel) {
+        updatePayload.classLevel = classLevel;
+    }
     const subject = await Subject.findByIdAndUpdate(req.params.id,
-        {
-            name,
-            description,
-            academicTerms,
-            createdBy: req.userAuth._id,
-        },
+        updatePayload,
         {
             new: true,
         }

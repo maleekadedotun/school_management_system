@@ -52,7 +52,7 @@ const examResultsSchema = new mongoose.Schema(
         remarks:{
             type: String,
             required: true,
-            enum: ["Excellent", "Good", "Poor"],
+            enum: ["Excellent", "Very Good", "Good", "Fair", "Poor"],
             default: "Poor",
         },
 
@@ -83,9 +83,30 @@ const examResultsSchema = new mongoose.Schema(
             required: true,
         },
 
+        // Tier 1: Teacher review & publication
+        isTeacherPublished:{
+            type: Boolean,
+            default: false,
+        },
+        teacherPublishedAt:{
+            type: Date,
+        },
+        teacherPublishedBy:{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Teacher",
+        },
+
+        // Tier 2: Admin final publication (releases result to student)
         isPublished:{
             type: Boolean,
             default: false,
+        },
+        adminPublishedAt:{
+            type: Date,
+        },
+        adminPublishedBy:{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Admin",
         },
 
     },
