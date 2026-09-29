@@ -444,6 +444,13 @@ exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
     // 2. Pending Admin review (teacher published, awaiting admin final release)
     const pendingAdminReview = allExamResults.filter(r => r?.isTeacherPublished === true && !r?.isPublished);
 
+    // Collect all exam IDs written/completed by this student (including unpublished)
+    const writtenExamIds = [...new Set(
+        allExamResults
+            .map(r => (r?.exam?._id || r?.exam)?.toString())
+            .filter(Boolean)
+    )];
+
     res.status(200).json({
         status: "Success",
         message: "Student profile fetched successfully",
@@ -451,6 +458,8 @@ exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
             studentProfile,
             currentExamResult: currentExamResult,
             examResults: publishedResults,
+            allExamResults: allExamResults,
+            writtenExamIds: writtenExamIds,
             hasPendingReview: hasPendingReview,
             pendingTeacherReviewCount: pendingTeacherReview.length,
             pendingAdminReviewCount: pendingAdminReview.length,
@@ -792,7 +801,8 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
         exam: examFound?._id,
         $or: [
             { studentID: studentFound?.StudentId },
-            { studentID: studentFound?._id.toString() }
+            { studentID: studentFound?._id.toString() },
+            { _id: { $in: studentFound.examsResults || [] } }
         ]
     });
     if (studentFoundResults) {
@@ -944,6 +954,7 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
         status: "Success",
         message: "Exam submitted successfully! Your submission has been delivered to your respective teacher's dashboard for review. Once verified and published by your teacher, it will proceed to administration for final release.",
         data: examResults,
+        examId: examFound?._id,
     });
 });
 

@@ -2,6 +2,8 @@ const AsyncHandler = require("express-async-handler");
 const ExamResult = require("../../models/Academy/ExamResults");
 const Student = require("../../models/Academy/Student");
 const Teacher = require("../../models/Staff/Teacher");
+const Exam = require("../../models/Academy/Exam");
+
 // const { path } = require("../../app/app");
 
 
@@ -9,7 +11,7 @@ const Teacher = require("../../models/Staff/Teacher");
 //@route GET /api/v1/exam-results/:id/checking
 //@access private Student only
 
-exports.checkExamResultsCtrl = AsyncHandler(async(req, res) => {
+exports.checkExamResultsCtrl = AsyncHandler(async (req, res) => {
     // find the student
     const studentFound = await Student.findById(req.userAuth?._id);
     if (!studentFound) {
@@ -24,15 +26,15 @@ exports.checkExamResultsCtrl = AsyncHandler(async(req, res) => {
             { studentID: studentFound._id.toString() }
         ]
     })
-    .populate({
-        path: "exam",
-        populate: {
-            path: "questions",
-        }
-    })
-    .populate("classLevel")
-    .populate("academicTerm")
-    .populate("academicYear");
+        .populate({
+            path: "exam",
+            populate: {
+                path: "questions",
+            }
+        })
+        .populate("classLevel")
+        .populate("academicTerm")
+        .populate("academicYear");
 
     if (!examResult) {
         return res.status(404).json({
@@ -67,7 +69,7 @@ exports.checkExamResultsCtrl = AsyncHandler(async(req, res) => {
 //@route GET /api/v1/exam-results
 //@access private Student only
 
-exports.fetchExamResultsCtrl = AsyncHandler(async(req, res) => {
+exports.fetchExamResultsCtrl = AsyncHandler(async (req, res) => {
     const student = await Student.findById(req.userAuth?._id);
     if (!student) {
         return res.status(404).json({
@@ -84,20 +86,20 @@ exports.fetchExamResultsCtrl = AsyncHandler(async(req, res) => {
             { studentID: student._id.toString() }
         ]
     })
-    .populate({
-        path: "exam",
-        populate: [
-            { path: "subject" },
-            { path: "program" },
-            { path: "academicTerm" },
-            { path: "academicYear" },
-            { path: "classLevel" }
-        ]
-    })
-    .populate("classLevel")
-    .populate("academicTerm")
-    .populate("academicYear")
-    .sort({ createdAt: -1 });
+        .populate({
+            path: "exam",
+            populate: [
+                { path: "subject" },
+                { path: "program" },
+                { path: "academicTerm" },
+                { path: "academicYear" },
+                { path: "classLevel" }
+            ]
+        })
+        .populate("classLevel")
+        .populate("academicTerm")
+        .populate("academicYear")
+        .sort({ createdAt: -1 });
 
     res.status(200).json({
         status: "Success",
@@ -178,8 +180,8 @@ exports.getAllExamResultsAdminCtrl = AsyncHandler(async (req, res) => {
             ...(validMongoIDs.length > 0 ? [{ _id: { $in: validMongoIDs } }] : [])
         ]
     })
-    .select("name email StudentId program classLevels currentClassLevel")
-    .populate("program");
+        .select("name email StudentId program classLevels currentClassLevel")
+        .populate("program");
 
     const studentMap = {};
     students.forEach(s => {
@@ -283,7 +285,7 @@ exports.getStudentResultsAdminCtrl = AsyncHandler(async (req, res) => {
 //@route POST /api/v1/exam-results/:id/admin-toggle-publish
 //@access private Admin only
 
-exports.adminToggleExamResult = AsyncHandler(async(req, res) => {
+exports.adminToggleExamResult = AsyncHandler(async (req, res) => {
     // find the exam result
     const examResult = await ExamResult.findById(req.params.id);
     if (!examResult) {
@@ -293,8 +295,8 @@ exports.adminToggleExamResult = AsyncHandler(async(req, res) => {
         });
     }
 
-    const newPublishStatus = req.body.publish !== undefined 
-        ? Boolean(req.body.publish) 
+    const newPublishStatus = req.body.publish !== undefined
+        ? Boolean(req.body.publish)
         : !examResult.isPublished;
 
     // MANDATORY WORKFLOW RULE: Admin should NOT publish result until teacher has reviewed & published it!
@@ -306,27 +308,27 @@ exports.adminToggleExamResult = AsyncHandler(async(req, res) => {
     }
 
     const publishResult = await ExamResult.findByIdAndUpdate(
-        req.params.id, 
-        { 
+        req.params.id,
+        {
             isPublished: newPublishStatus,
             adminPublishedAt: newPublishStatus ? new Date() : null,
             adminPublishedBy: newPublishStatus ? req.userAuth?._id : null,
-        }, 
+        },
         { new: true }
     )
-    .populate({
-        path: "exam",
-        populate: [
-            { path: "subject" },
-            { path: "program" },
-            { path: "academicTerm" },
-            { path: "academicYear" },
-            { path: "classLevel" }
-        ]
-    })
-    .populate("classLevel")
-    .populate("academicTerm")
-    .populate("academicYear");
+        .populate({
+            path: "exam",
+            populate: [
+                { path: "subject" },
+                { path: "program" },
+                { path: "academicTerm" },
+                { path: "academicYear" },
+                { path: "classLevel" }
+            ]
+        })
+        .populate("classLevel")
+        .populate("academicTerm")
+        .populate("academicYear");
 
     // Fetch student info
     let student = await Student.findOne({
@@ -341,8 +343,8 @@ exports.adminToggleExamResult = AsyncHandler(async(req, res) => {
 
     res.status(200).json({
         status: "Success",
-        message: newPublishStatus 
-            ? "Exam result published by Admin successfully! It is now live on the student dashboard." 
+        message: newPublishStatus
+            ? "Exam result published by Admin successfully! It is now live on the student dashboard."
             : "Exam result unpublished by Admin. The result has been hidden from student view.",
         data: resultObj,
     });
@@ -361,7 +363,6 @@ exports.teacherEnterExamResultCtrl = AsyncHandler(async (req, res) => {
         });
     }
 
-    const Exam = require("../../models/Academy/Exam");
 
     // Find student
     let student = null;
@@ -562,19 +563,19 @@ exports.teacherTogglePublishResultCtrl = AsyncHandler(async (req, res) => {
         updateFields,
         { new: true }
     )
-    .populate({
-        path: "exam",
-        populate: [
-            { path: "subject" },
-            { path: "program" },
-            { path: "academicTerm" },
-            { path: "academicYear" },
-            { path: "classLevel" }
-        ]
-    })
-    .populate("classLevel")
-    .populate("academicTerm")
-    .populate("academicYear");
+        .populate({
+            path: "exam",
+            populate: [
+                { path: "subject" },
+                { path: "program" },
+                { path: "academicTerm" },
+                { path: "academicYear" },
+                { path: "classLevel" }
+            ]
+        })
+        .populate("classLevel")
+        .populate("academicTerm")
+        .populate("academicYear");
 
     // Fetch student info
     let student = await Student.findOne({
