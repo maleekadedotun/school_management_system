@@ -17,13 +17,15 @@ const checkExamResultsRouter = require("../routes/academic/checkExamResultRouter
 const attendanceRouter = require("../routes/academic/attendanceRouter");
 const classReportRouter = require("../routes/academic/classReportRouter");
 const notificationRouter = require("../routes/staff/notificationRouter");
+const assignmentRouter = require("../routes/academic/assignmentRouter");
 const Student = require("../models/Academy/Student");
 // const academicTermRouter = require("../routes/academic/academicTermRouter");
 
 const app = express();
 // middlewares
 app.use(morgan("dev"));
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 app.use(cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -75,6 +77,7 @@ app.use("/api/v1/exam-results", checkExamResultsRouter);
 app.use("/api/v1/attendance", attendanceRouter);
 app.use("/api/v1/class-reports", classReportRouter);
 app.use("/api/v1/notifications", notificationRouter);
+app.use("/api/v1/assignments", assignmentRouter);
 
 
 // ✅ root route

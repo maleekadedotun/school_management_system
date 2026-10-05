@@ -37,13 +37,41 @@ exports.createClassLevelCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.fetchClassLevelsCtrl = AsyncHandler(async(req, res) => {
-    const classLevel = await ClassLevel.find();
+    const classLevels = await ClassLevel.find().lean();
+    const Student = require("../../models/Academy/Student");
+    const Subject = require("../../models/Academy/Subject");
 
-    res.status(201).json({
+    const allStudents = await Student.find({}, "name StudentId currentClassLevel classLevels email").lean();
+    const allSubjects = await Subject.find({}, "name description classLevel").lean();
+
+    const enriched = classLevels.map((lvl) => {
+        const lvlName = (lvl.name || "").trim().toLowerCase();
+        const lvlId = lvl._id.toString();
+
+        const enrolledStudents = allStudents.filter((s) => {
+            const current = (s.currentClassLevel || (Array.isArray(s.classLevels) && s.classLevels.length > 0 ? s.classLevels[s.classLevels.length - 1] : "") || "").trim().toLowerCase();
+            return current && (current === lvlName || current === lvlId);
+        });
+
+        const classSubjects = allSubjects.filter((sub) => {
+            const subLvl = (sub.classLevel || "").trim().toLowerCase();
+            return subLvl && (subLvl === lvlName || subLvl === lvlId);
+        });
+
+        return {
+            ...lvl,
+            students: enrolledStudents,
+            subjects: classSubjects,
+            studentCount: enrolledStudents.length,
+            subjectCount: classSubjects.length,
+        };
+    });
+
+    res.status(200).json({
         status : "Success",
         message: "Class levels fetched successfully",
-        data: classLevel,
-    })
+        data: enriched,
+    });
 });
 
 //@desc get single class level
@@ -51,15 +79,44 @@ exports.fetchClassLevelsCtrl = AsyncHandler(async(req, res) => {
 //@access private
 
 exports.fetchClassLevelCtrl = AsyncHandler(async(req, res) => {
-    // console.log(req.params.id, "single");
-    
-    const classLevel = await ClassLevel.findById(req.params.id);
+    const classLevel = await ClassLevel.findById(req.params.id).lean();
+    if (!classLevel) {
+        return res.status(404).json({
+            status: "Failed",
+            message: "Class level not found",
+        });
+    }
 
-    res.status(201).json({
+    const Student = require("../../models/Academy/Student");
+    const Subject = require("../../models/Academy/Subject");
+
+    const lvlName = (classLevel.name || "").trim().toLowerCase();
+    const lvlId = classLevel._id.toString();
+
+    const allStudents = await Student.find({}, "name StudentId currentClassLevel classLevels email").lean();
+    const allSubjects = await Subject.find({}, "name description classLevel").lean();
+
+    const enrolledStudents = allStudents.filter((s) => {
+        const current = (s.currentClassLevel || (Array.isArray(s.classLevels) && s.classLevels.length > 0 ? s.classLevels[s.classLevels.length - 1] : "") || "").trim().toLowerCase();
+        return current && (current === lvlName || current === lvlId);
+    });
+
+    const classSubjects = allSubjects.filter((sub) => {
+        const subLvl = (sub.classLevel || "").trim().toLowerCase();
+        return subLvl && (subLvl === lvlName || subLvl === lvlId);
+    });
+
+    res.status(200).json({
         status : "Success",
-        message: "academic year fetched successfully",
-        data: classLevel,
-    })
+        message: "Class level fetched successfully",
+        data: {
+            ...classLevel,
+            students: enrolledStudents,
+            subjects: classSubjects,
+            studentCount: enrolledStudents.length,
+            subjectCount: classSubjects.length,
+        },
+    });
 });
 
 //@desc update class level

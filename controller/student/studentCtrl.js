@@ -583,6 +583,7 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
     }
 
     const updateSet = {};
+    const updateOps = { $set: updateSet };
     if (name !== undefined && name !== "") updateSet.name = name;
     if (email !== undefined && email !== "") updateSet.email = email;
     if (prefectName !== undefined) updateSet.prefectName = prefectName;
@@ -654,10 +655,10 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
     }
 
     // Set class level and track history
-    const updateOps = { $set: updateSet };
     if (classLevels) {
         updateSet.currentClassLevel = classLevels;
-        updateOps.$addToSet = { classLevels: classLevels };
+        if (!updateOps.$addToSet) updateOps.$addToSet = {};
+        updateOps.$addToSet.classLevels = classLevels;
     }
 
     // AUTO-PICK TEACHER: if student has subject, auto-pick the teacher
