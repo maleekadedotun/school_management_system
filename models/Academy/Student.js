@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+require("./Subject");
 
 const studentSchema = new mongoose.Schema(
     {

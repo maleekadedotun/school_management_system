@@ -12,13 +12,16 @@ const Teacher = require("../../models/Staff/Teacher");
 const ClassLevel = require("../../models/Academy/ClassLevel");
 const Program = require("../../models/Academy/program");
 const AcademicYear = require("../../models/Academy/AcademicYear");
+const AcademicTerm = require("../../models/Academy/AcademicTerm");
+const Subject = require("../../models/Academy/Subject");
+const Question = require("../../models/Academy/Question");
 
 //@desc register student
 //@route POST /api/v1/students/admin/register
 //@access private Admin only
 
 exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
-    const { name, password, email, classLevels, subject, program } = req.body;
+    const { name, password, email, classLevels, subject, subjects, subjectIds, program } = req.body;
     // find admin
     const adminFound = await Admin.findById(req.userAuth._id);
     if (!adminFound) {
@@ -42,12 +45,50 @@ exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
         studentData.classLevels = Array.isArray(classLevels) ? classLevels : [classLevels];
     }
     if (subject) {
-        studentData.subject = subject;
+        if (mongoose.Types.ObjectId.isValid(subject)) {
+            const Subject = require("../../models/Academy/Subject");
+            const sDoc = await Subject.findById(subject);
+            studentData.subject = sDoc ? sDoc.name : subject;
+        } else {
+            studentData.subject = subject;
+        }
     }
     if (req.body.enrolledSubjects && Array.isArray(req.body.enrolledSubjects)) {
         studentData.enrolledSubjects = req.body.enrolledSubjects;
     } else {
         studentData.enrolledSubjects = [];
+    }
+
+    // Support explicitly selected multiple subjects
+    const explicitSubs = Array.isArray(subjects) ? subjects : (subjects ? [subjects] : (Array.isArray(subjectIds) ? subjectIds : (subjectIds ? [subjectIds] : [])));
+    if (explicitSubs.length > 0) {
+        const Subject = require("../../models/Academy/Subject");
+        for (const s of explicitSubs) {
+            if (!s) continue;
+            const sStr = typeof s === "object" && s._id ? s._id.toString() : s.toString().trim();
+            let sDoc = null;
+            if (mongoose.Types.ObjectId.isValid(sStr)) {
+                sDoc = await Subject.findById(sStr);
+            }
+            if (!sDoc) {
+                sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${sStr.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } });
+            }
+            if (sDoc) {
+                const alreadyEnrolled = studentData.enrolledSubjects.some(
+                    e => (e.subject?._id || e.subject)?.toString() === sDoc._id.toString()
+                );
+                if (!alreadyEnrolled) {
+                    studentData.enrolledSubjects.push({
+                        subject: sDoc._id,
+                        classLevel: sDoc.classLevel || studentData.currentClassLevel || "Level 100",
+                        dateEnrolled: new Date(),
+                    });
+                }
+                if (!studentData.subject) {
+                    studentData.subject = sDoc.name;
+                }
+            }
+        }
     }
 
     // Auto-pick program and auto-enroll student into ALL subjects under that program
@@ -473,7 +514,12 @@ exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
 //@access public admin only
 
 exports.fetchAllStudentsAdmin = AsyncHandler(async (req, res) => {
-    const students = await Student.find().populate("program academicYear assignedTeacher");
+    const students = await Student.find()
+        .populate("program academicYear assignedTeacher")
+        .populate({
+            path: "enrolledSubjects.subject",
+            select: "name description classLevel academicTerms program"
+        });
     res.status(200).json({
         status: "Success",
         message: "Students fetched successfully",
@@ -488,7 +534,12 @@ exports.fetchAllStudentsAdmin = AsyncHandler(async (req, res) => {
 
 exports.fetchStudentAdmin = AsyncHandler(async (req, res) => {
     const studentID = req.params.studentID;
-    const student = await Student.findById(studentID).populate("program academicYear assignedTeacher");
+    const student = await Student.findById(studentID)
+        .populate("program academicYear assignedTeacher")
+        .populate({
+            path: "enrolledSubjects.subject",
+            select: "name description classLevel academicTerms program"
+        });
     if (!student) {
         throw new Error("Student not found");
     }
@@ -589,17 +640,74 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
     if (prefectName !== undefined) updateSet.prefectName = prefectName;
     if (isSuspended !== undefined) updateSet.isSuspended = isSuspended;
     if (isWithDrawn !== undefined) updateSet.isWithDrawn = isWithDrawn;
-    if (req.body.enrolledSubjects !== undefined) updateSet.enrolledSubjects = req.body.enrolledSubjects;
 
     // Handle subject assignment (can be ObjectId or name)
-    if (subject !== undefined) {
-        if (subject && mongoose.Types.ObjectId.isValid(subject)) {
+    if (subject !== undefined && subject !== "") {
+        if (mongoose.Types.ObjectId.isValid(subject)) {
             const Subject = require("../../models/Academy/Subject");
             const sDoc = await Subject.findById(subject);
             updateSet.subject = sDoc ? sDoc.name : subject;
         } else {
             updateSet.subject = subject;
         }
+    }
+
+    // Set class level and track history
+    if (classLevels) {
+        updateSet.currentClassLevel = classLevels;
+        if (!updateOps.$addToSet) updateOps.$addToSet = {};
+        updateOps.$addToSet.classLevels = classLevels;
+    }
+
+    const Subject = require("../../models/Academy/Subject");
+    const activeClassLevel = updateSet.currentClassLevel || studentFound.currentClassLevel || "Level 100";
+
+    // Prepare enrolledSubjects array safely in-memory without mixing $set and $addToSet
+    let currentEnrolled = [];
+    let enrollmentsModified = false;
+
+    // Handle multiple subjects assignment
+    const explicitSubs = Array.isArray(req.body.subjects)
+        ? req.body.subjects
+        : (req.body.subjects ? [req.body.subjects] : (Array.isArray(req.body.subjectIds) ? req.body.subjectIds : (req.body.subjectIds ? [req.body.subjectIds] : null)));
+
+    let firstSubName = "";
+
+    if (explicitSubs !== null) {
+        enrollmentsModified = true;
+        for (const s of explicitSubs) {
+            if (!s) continue;
+            const sStr = typeof s === "object" && s._id ? s._id.toString() : s.toString().trim();
+            let sDoc = null;
+            if (mongoose.Types.ObjectId.isValid(sStr)) {
+                sDoc = await Subject.findById(sStr);
+            }
+            if (!sDoc) {
+                sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${sStr.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } });
+            }
+            if (sDoc) {
+                if (!firstSubName) firstSubName = sDoc.name;
+                const existingItem = (studentFound.enrolledSubjects || []).find(
+                    e => (e.subject?._id || e.subject)?.toString() === sDoc._id.toString()
+                );
+                if (!currentEnrolled.some(e => (e.subject?._id || e.subject)?.toString() === sDoc._id.toString())) {
+                    currentEnrolled.push({
+                        subject: sDoc._id,
+                        classLevel: sDoc.classLevel || activeClassLevel,
+                        dateEnrolled: existingItem?.dateEnrolled || new Date(),
+                    });
+                }
+            }
+        }
+    } else if (req.body.enrolledSubjects !== undefined && Array.isArray(req.body.enrolledSubjects)) {
+        enrollmentsModified = true;
+        currentEnrolled = [...req.body.enrolledSubjects];
+    } else {
+        currentEnrolled = [...(studentFound.enrolledSubjects || [])];
+    }
+
+    if (!updateSet.subject && firstSubName) {
+        updateSet.subject = firstSubName;
     }
 
     // Handle program assignment (ObjectId or name)
@@ -613,8 +721,7 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
         if (matchedProgramDoc) {
             updateSet.program = matchedProgramDoc._id;
 
-            // Auto-enroll all subjects under this program
-            const Subject = require("../../models/Academy/Subject");
+            // Auto-enroll all subjects under this program if explicit subjects weren't given
             const progSubjects = await Subject.find({
                 $or: [
                     { program: matchedProgramDoc._id },
@@ -622,26 +729,26 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
                 ]
             });
 
-            const currentEnrolled = studentFound.enrolledSubjects || [];
-            const newEnrollments = [];
-            for (const pSub of progSubjects) {
-                const exists = currentEnrolled.some(
-                    e => (e.subject?._id || e.subject)?.toString() === pSub._id.toString()
-                );
-                if (!exists) {
-                    newEnrollments.push({
-                        subject: pSub._id,
-                        classLevel: pSub.classLevel || updateSet.currentClassLevel || studentFound.currentClassLevel || "Level 100",
-                        dateEnrolled: new Date(),
-                    });
+            if (explicitSubs === null && req.body.enrolledSubjects === undefined) {
+                for (const pSub of progSubjects) {
+                    const exists = currentEnrolled.some(
+                        e => (e.subject?._id || e.subject)?.toString() === pSub._id.toString()
+                    );
+                    if (!exists) {
+                        currentEnrolled.push({
+                            subject: pSub._id,
+                            classLevel: pSub.classLevel || activeClassLevel,
+                            dateEnrolled: new Date(),
+                        });
+                        enrollmentsModified = true;
+                    }
                 }
             }
-
-            if (newEnrollments.length > 0) {
-                if (!updateOps.$addToSet) updateOps.$addToSet = {};
-                updateOps.$addToSet.enrolledSubjects = { $each: newEnrollments };
-            }
         }
+    }
+
+    if (enrollmentsModified) {
+        updateSet.enrolledSubjects = currentEnrolled;
     }
 
     // Handle academicYear assignment (ObjectId or name)
@@ -652,13 +759,6 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
             const yr = await AcademicYear.findOne({ name: academicYear });
             if (yr) updateSet.academicYear = yr._id;
         }
-    }
-
-    // Set class level and track history
-    if (classLevels) {
-        updateSet.currentClassLevel = classLevels;
-        if (!updateOps.$addToSet) updateOps.$addToSet = {};
-        updateOps.$addToSet.classLevels = classLevels;
     }
 
     // AUTO-PICK TEACHER: if student has subject, auto-pick the teacher
@@ -695,7 +795,6 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
         }
 
         // 2. Fallback ONLY to a teacher who has NO class level restriction (universal subject teacher)
-        // NEVER match a teacher assigned to a different class level (e.g. 100L teacher for 400L student)!
         if (!matchedTeacher) {
             matchedTeacher = await Teacher.findOne({
                 $and: [
@@ -711,7 +810,9 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
             });
         }
 
-        updateSet.assignedTeacher = matchedTeacher ? matchedTeacher._id : null;
+        if (matchedTeacher) {
+            updateSet.assignedTeacher = matchedTeacher._id;
+        }
     }
 
     const studentUpdated = await Student.findByIdAndUpdate(
@@ -721,7 +822,12 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
             new: true,
             runValidators: true,
         }
-    ).populate("program academicYear assignedTeacher");
+    )
+    .populate("program academicYear assignedTeacher")
+    .populate({
+        path: "enrolledSubjects.subject",
+        select: "name description classLevel academicTerms program"
+    });
 
     // Also link student to Program document if assigned
     if (updateSet.program) {
@@ -758,24 +864,48 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
         });
 
     if (!studentFound) {
-        throw new Error("Student not found");
+        res.status(404);
+        const err = new Error("Student not found");
+        err.statusCode = 404;
+        throw err;
     }
     // get examID
     const examFound = await Exam.findById(req.params.examID)
         .populate("questions")
         .populate("academicTerm")
+        .populate("academicYear")
         .populate("subject")
+        .populate("program")
         .populate("classLevel");
 
     if (!examFound) {
-        throw new Error("Exam not found");
+        res.status(404);
+        const err = new Error("Exam not found");
+        err.statusCode = 404;
+        throw err;
     }
 
-    // Verify student is eligible: Exam must match their class, offered subject, and assigned teacher
+    // Resolve exam creator (Teacher or Admin) so authority / permissions are accurately evaluated
+    let creatorDoc = null;
+    if (examFound.createdBy) {
+        creatorDoc = await Teacher.findById(examFound.createdBy).select("name email teacherId role subject classLevel").lean();
+        if (!creatorDoc) {
+            creatorDoc = await Admin.findById(examFound.createdBy).select("name email role").lean();
+            if (creatorDoc) {
+                creatorDoc.role = "admin";
+            }
+        }
+    }
+    if (!creatorDoc) {
+        creatorDoc = { name: "School Administration", role: "admin" };
+    }
+    const examForFilter = examFound.toObject ? examFound.toObject() : { ...examFound };
+    examForFilter.createdBy = creatorDoc;
+
+    // Verify student is eligible: Exam must match their class, offered subject, and assigned teacher or admin
     const { filterExamsForStudent } = require("../academic/examCtrl");
     let studentForFilter = studentFound.toObject ? studentFound.toObject() : studentFound;
     if (!studentForFilter.assignedTeacher && studentForFilter.subject) {
-        const Teacher = require("../../models/Staff/Teacher");
         const subRegex = new RegExp(`^${studentForFilter.subject.toString().trim()}$`, "i");
         const matchedTeacher = await Teacher.findOne({
             $or: [{ subject: studentForFilter.subject }, { subject: subRegex }]
@@ -784,9 +914,12 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
             studentForFilter.assignedTeacher = matchedTeacher;
         }
     }
-    const eligibleExams = filterExamsForStudent([examFound], studentForFilter);
+    const eligibleExams = filterExamsForStudent([examForFilter], studentForFilter);
     if (!eligibleExams || eligibleExams.length === 0) {
-        throw new Error("You are only eligible to take examinations set for your enrolled subject and assigned teacher in your class.");
+        res.status(403);
+        const err = new Error("You are only eligible to take examinations set for your enrolled subject and assigned teacher in your class.");
+        err.statusCode = 403;
+        throw err;
     }
 
     // get question
@@ -794,25 +927,49 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
     // get student answer
     const studentAnswers = req.body.answers;
 
+    // check if exam has questions
+    if (!questions || questions.length === 0) {
+        res.status(400);
+        const err = new Error("This exam does not have any questions yet.");
+        err.statusCode = 400;
+        throw err;
+    }
+
     // check if student answered all questions
     if (!studentAnswers || questions.length !== studentAnswers.length) {
-        throw new Error("You must answer all questions");
+        res.status(400);
+        const err = new Error("You must answer all questions");
+        err.statusCode = 400;
+        throw err;
     }
     const studentFoundResults = await ExamResults.findOne({
-        exam: examFound?._id,
         $or: [
             { studentID: studentFound?.StudentId },
             { studentID: studentFound?._id.toString() },
             { _id: { $in: studentFound.examsResults || [] } }
+        ],
+        $and: [
+            {
+                $or: [
+                    { exam: examFound?._id },
+                    { examsTaken: examFound?._id }
+                ]
+            }
         ]
     });
     if (studentFoundResults) {
-        throw new Error("You have already written this exam");
+        res.status(400);
+        const err = new Error("You have already written this exam");
+        err.statusCode = 400;
+        throw err;
     }
 
     // check id student is suspended/withdrawn
     if (studentFound.isSuspended || studentFound.isWithDrawn) {
-        throw new Error("You are suspended/withdrawn, you can't take this exam");
+        res.status(403);
+        const err = new Error("You are suspended/withdrawn, you can't take this exam");
+        err.statusCode = 403;
+        throw err;
     }
 
     // Build report object
@@ -865,7 +1022,7 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
 
     // calculate repport
     totalQuestions = questions.length;
-    grade = (correctAnswers / totalQuestions) * 100;
+    grade = Math.round((correctAnswers / totalQuestions) * 100);
     answeredQuestions = questions.map(question => {
         return {
             question: question.question,
@@ -875,8 +1032,17 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
         }
     });
 
-    // calculate status
-    if (grade >= 50) {
+    const isExamTypeExam = ["final", "exam", "examination"].includes((examFound.examType || "").toLowerCase());
+    const isTestType = ["test", "quiz", "continuous assessment", "ca"].includes((examFound.examType || "").toLowerCase());
+    const effectiveTotalMark = examFound.totalMark || (isTestType ? 30 : 70);
+    const effectivePassMark = examFound.passMark !== undefined ? Number(examFound.passMark) : (isTestType ? 15 : 40);
+    const scaledScore = Math.round(((correctAnswers / totalQuestions) * effectiveTotalMark) * 10) / 10;
+
+    // calculate status (pass mark 40 for Exam out of 70, 15 for Test out of 30)
+    const passThreshold = effectivePassMark <= 100 && effectiveTotalMark === 100
+        ? effectivePassMark
+        : (effectivePassMark / effectiveTotalMark) * 100;
+    if (grade >= passThreshold || scaledScore >= effectivePassMark) {
         status = "Passed";
     }
     else {
@@ -893,30 +1059,137 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
     else if (grade >= 60) {
         remarks = "Good";
     }
-    else if (grade >= 50) {
+    else if (grade >= 40) {
         remarks = "Fair";
     } else {
         remarks = "Poor";
     }
-    // generate results
-    const examResults = await ExamResults.create({
-        studentID: studentFound?.StudentId,
-        exam: examFound?._id,
-        grade,
-        score,
-        status,
-        remarks,
-        classLevel: examFound?.classLevel,
-        academicTerm: examFound?.academicTerm,
-        academicYear: examFound?.academicYear,
-        answeredQuestions: answeredQuestions,
-        isTeacherPublished: false, // Step 1: Delivered to respective teacher's dashboard for verification & publishing
-        isPublished: false, // Step 2: Hidden from Admin and Student until respective teacher publishes it
+    const yearId = examFound.academicYear?._id || examFound.academicYear;
+    const termId = examFound.academicTerm?._id || examFound.academicTerm;
+    const classId = examFound.classLevel?._id || examFound.classLevel;
+    const subjectId = examFound.subject?._id || examFound.subject;
+    const subjectName = examFound.subject?.name || (typeof examFound.subject === "string" ? examFound.subject : "Subject");
+    const programId = examFound.program?._id || examFound.program || studentFound.program?._id || studentFound.program;
+    const programName = examFound.program?.name || studentFound.program?.name || "";
+
+    // Check if an existing ExamResult exists for this student in this subject & term so test & exam are saved together in one line
+    let examResults = await ExamResults.findOne({
+        $or: [
+            { studentID: studentFound?.StudentId, subject: subjectId, academicTerm: termId },
+            { studentID: studentFound?._id.toString(), subject: subjectId, academicTerm: termId },
+            { _id: { $in: studentFound.examsResults || [] }, subject: subjectId, academicTerm: termId }
+        ]
     });
-    // push the results
-    studentFound.examsResults.push(examResults?._id);
-    // save report to student
-    await studentFound.save();
+
+    if (examResults) {
+        if (isExamTypeExam) {
+            examResults.examScore = scaledScore;
+        } else {
+            examResults.testScore = scaledScore;
+        }
+        const combinedTotal = (examResults.testScore || 0) + (examResults.examScore || 0);
+        examResults.score = combinedTotal;
+        examResults.grade = Math.min(100, Math.round(combinedTotal));
+        examResults.passMark = 40;
+        examResults.status = combinedTotal >= 40 ? "Passed" : "Failed";
+
+        if (examResults.grade >= 80) examResults.remarks = "Excellent";
+        else if (examResults.grade >= 70) examResults.remarks = "Very Good";
+        else if (examResults.grade >= 60) examResults.remarks = "Good";
+        else if (examResults.grade >= 40) examResults.remarks = "Fair";
+        else examResults.remarks = "Poor";
+
+        if (Array.isArray(answeredQuestions) && answeredQuestions.length > 0) {
+            examResults.answeredQuestions = answeredQuestions;
+        }
+        if (!examResults.examsTaken) examResults.examsTaken = [];
+        if (!examResults.examsTaken.includes(examFound._id)) {
+            examResults.examsTaken.push(examFound._id);
+        }
+        await examResults.save();
+    } else {
+        examResults = await ExamResults.create({
+            studentID: studentFound?.StudentId,
+            exam: examFound?._id,
+            examsTaken: [examFound?._id],
+            grade,
+            score: scaledScore,
+            passMark: effectivePassMark,
+            testScore: isExamTypeExam ? 0 : scaledScore,
+            examScore: isExamTypeExam ? scaledScore : 0,
+            status,
+            remarks,
+            subject: subjectId,
+            subjectName: subjectName,
+            program: programId,
+            programName: programName,
+            currentClassLevel: studentFound.currentClassLevel || (examFound.classLevel?.name || ""),
+            classLevel: classId,
+            academicTerm: termId,
+            academicYear: yearId,
+            answeredQuestions: answeredQuestions,
+            isTeacherPublished: false,
+            isPublished: false,
+        });
+
+        if (!studentFound.examsResults.includes(examResults._id)) {
+            studentFound.examsResults.push(examResults._id);
+            await studentFound.save();
+        }
+    }
+
+    // Automatically document score into StudentSubjectResult for Report Card system
+    try {
+        const StudentSubjectResult = require("../../models/Academy/StudentSubjectResult");
+
+        if (yearId && termId && classId && subjectId) {
+            let subjectResult = await StudentSubjectResult.findOne({
+                student: studentFound._id,
+                academicYear: yearId,
+                academicTerm: termId,
+                classLevel: classId,
+                subject: subjectId,
+            });
+
+            // If it's a test/quiz, score is scaled to max 30 marks
+            // If it's a final exam, score is scaled to max 70 marks
+            const scaledScore = isExamTypeExam
+                ? Math.min(70, Math.round(((grade || 0) / 100) * 70 * 10) / 10)
+                : Math.min(30, Math.round(((grade || 0) / 100) * 30 * 10) / 10);
+
+            if (!subjectResult) {
+                const initTest = isExamTypeExam ? 0 : scaledScore;
+                const initExam = isExamTypeExam ? scaledScore : 0;
+                subjectResult = new StudentSubjectResult({
+                    student: studentFound._id,
+                    studentID: studentFound.StudentId,
+                    academicYear: yearId,
+                    academicTerm: termId,
+                    classLevel: classId,
+                    subject: subjectId,
+                    subjectName: subjectName,
+                    testScore: initTest,
+                    examScore: initExam,
+                    totalScore: initTest + initExam,
+                    grade: Math.min(100, Math.round(initTest + initExam)),
+                    recordedBy: examFound.createdBy || studentFound._id,
+                    status: "saved",
+                });
+            } else {
+                if (isExamTypeExam) {
+                    subjectResult.examScore = scaledScore;
+                } else {
+                    subjectResult.testScore = scaledScore;
+                }
+                subjectResult.totalScore = (subjectResult.testScore || 0) + (subjectResult.examScore || 0);
+                subjectResult.grade = Math.min(100, Math.round(subjectResult.totalScore));
+            }
+
+            await subjectResult.save();
+        }
+    } catch (ssrErr) {
+        console.error("Auto-document to StudentSubjectResult error:", ssrErr.message);
+    }
 
     // promote
     // promot student to level 200
@@ -960,8 +1233,9 @@ exports.studentWriteExamCtrl = AsyncHandler(async (req, res) => {
 });
 
 
-//@desc teacher get students strictly in their assigned class level
+//@desc teacher get students strictly in their assigned class level offering the teacher subject alone
 //@route GET /api/v1/students/teacher
+//@route GET /api/v1/students/teacher/class-students
 //@access private teacher only
 exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
     const teacher = await Teacher.findById(req.userAuth?._id);
@@ -982,13 +1256,16 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
     }
 
     const mongoose = require("mongoose");
-    let targetClassName = teacher.classLevel || "";
+    const Subject = require("../../models/Academy/Subject");
+    const ClassLevel = require("../../models/Academy/ClassLevel");
+
+    let targetClassName = (teacher.classLevel || "").toString().trim();
 
     // If teacher.classLevel is an ObjectId, resolve the ClassLevel document's name
     if (teacher.classLevel && mongoose.Types.ObjectId.isValid(teacher.classLevel)) {
         const cDoc = await ClassLevel.findById(teacher.classLevel);
         if (cDoc && cDoc.name) {
-            targetClassName = cDoc.name;
+            targetClassName = cDoc.name.trim();
         }
     }
 
@@ -1006,42 +1283,103 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
         ? new RegExp(`(^|\\b|\\D)${teacherLevelNumber}(\\D|\\b|$)`, "i")
         : targetClassName ? new RegExp(`^${targetClassName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, "i") : null;
 
-    const orConditions = [
-        { assignedTeacher: teacher._id }
-    ];
+    // Collect all subject IDs and names associated with this teacher
+    const teacherSubjectIds = new Set();
+    const teacherSubjectNames = new Set();
 
     if (teacher.subject) {
-        const subEsc = teacher.subject.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-        orConditions.push({ subject: teacher.subject });
-        orConditions.push({ subject: { $regex: new RegExp(`^${subEsc}$`, "i") } });
+        const rawSubStr = teacher.subject.toString().trim();
+        if (rawSubStr) {
+            teacherSubjectNames.add(rawSubStr.toLowerCase());
+            if (mongoose.Types.ObjectId.isValid(rawSubStr)) {
+                teacherSubjectIds.add(rawSubStr);
+            }
+        }
     }
+
+    if (Array.isArray(teacher.subjects)) {
+        teacher.subjects.forEach((sub) => {
+            if (!sub) return;
+            if (typeof sub === "object" && sub._id) {
+                teacherSubjectIds.add(sub._id.toString());
+                if (sub.name) teacherSubjectNames.add(sub.name.trim().toLowerCase());
+            } else {
+                const sStr = sub.toString().trim();
+                if (mongoose.Types.ObjectId.isValid(sStr)) {
+                    teacherSubjectIds.add(sStr);
+                } else if (sStr) {
+                    teacherSubjectNames.add(sStr.toLowerCase());
+                }
+            }
+        });
+    }
+
+    // Look up Subject documents linked to teacher (by teacher ref or name or _id)
+    const subjectQueryConditions = [{ teacher: teacher._id }];
+    if (teacher.subject) {
+        const escaped = teacher.subject.toString().trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        subjectQueryConditions.push({ name: { $regex: new RegExp(`^${escaped}$`, "i") } });
+        if (mongoose.Types.ObjectId.isValid(teacher.subject)) {
+            subjectQueryConditions.push({ _id: teacher.subject });
+        }
+    }
+    if (teacherSubjectIds.size > 0) {
+        subjectQueryConditions.push({
+            _id: { $in: Array.from(teacherSubjectIds).filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) }
+        });
+    }
+
+    const matchedSubjects = await Subject.find({ $or: subjectQueryConditions });
+    matchedSubjects.forEach((subDoc) => {
+        teacherSubjectIds.add(subDoc._id.toString());
+        if (subDoc.name) {
+            teacherSubjectNames.add(subDoc.name.trim().toLowerCase());
+        }
+    });
+
+    const hasTeacherSubject = teacherSubjectNames.size > 0 || teacherSubjectIds.size > 0;
+
+    // Base database filter
+    const orConditions = [];
 
     if (targetClassName) {
-        const classConditions = [
-            { currentClassLevel: targetClassName },
-            { currentClassLevel: teacher.classLevel }
-        ];
+        orConditions.push({ currentClassLevel: targetClassName });
+        orConditions.push({ currentClassLevel: teacher.classLevel });
         if (levelRegex) {
-            classConditions.push({ currentClassLevel: { $regex: levelRegex } });
+            orConditions.push({ currentClassLevel: { $regex: levelRegex } });
         }
-        orConditions.push({ $or: classConditions });
     }
 
-    const filter = { $or: orConditions };
+    if (hasTeacherSubject) {
+        Array.from(teacherSubjectNames).forEach((name) => {
+            const esc = name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            orConditions.push({ subject: { $regex: new RegExp(`^${esc}$`, "i") } });
+        });
+        if (teacherSubjectIds.size > 0) {
+            orConditions.push({
+                "enrolledSubjects.subject": { $in: Array.from(teacherSubjectIds).map(id => new mongoose.Types.ObjectId(id)) }
+            });
+        }
+    }
+
+    orConditions.push({ assignedTeacher: teacher._id });
+
+    const filter = orConditions.length > 0 ? { $or: orConditions } : {};
 
     const rawStudents = await Student.find(filter)
         .populate("program academicYear assignedTeacher")
+        .populate("enrolledSubjects.subject")
         .select("-password")
         .sort({ createdAt: -1 });
 
-    // Strict secondary filtering in memory to GUARANTEE class & subject alignment
+    // Strict filtering:
+    // 1) Student MUST match teacher's class level (if teacher has classLevel).
+    // 2) If teacher has subject(s), student MUST be offering the teacher's subject alone!
     const strictStudents = rawStudents.filter((student) => {
-        const studentLevel = (student.currentClassLevel || "").trim();
-        const studentLevelNum = extractLevelNumber(studentLevel);
-
-        // 1. If teacher has a restricted class level, student MUST strictly match teacher's class level!
-        // A 100L teacher must NEVER have a 400L student, even if mistakenly assigned
+        // 1. Class level check
         if (targetClassName) {
+            const studentLevel = (student.currentClassLevel || "").trim();
+            const studentLevelNum = extractLevelNumber(studentLevel);
             let classMatches = false;
             if (teacherLevelNumber && studentLevelNum) {
                 classMatches = studentLevelNum === teacherLevelNumber;
@@ -1053,35 +1391,46 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
             }
         }
 
-        // 2. If explicitly assigned to this teacher and matches class level (or teacher has no class restriction)
-        if (
-            student.assignedTeacher &&
-            (student.assignedTeacher._id?.toString() === teacher._id.toString() ||
-             student.assignedTeacher.toString() === teacher._id.toString())
-        ) {
-            return true;
-        }
+        // 2. Subject offering check: MUST offer the teacher's subject alone
+        if (hasTeacherSubject) {
+            let offersSubject = false;
 
-        // 3. If teacher is assigned a subject and student takes this subject
-        if (teacher.subject && student.subject) {
-            const cleanTSub = teacher.subject.trim().toLowerCase();
-            const cleanSSub = student.subject.trim().toLowerCase();
-            if (cleanTSub === cleanSSub) {
-                return true;
+            // Check student's direct subject field
+            if (student.subject) {
+                const sSubStr = student.subject.toString().trim().toLowerCase();
+                const sSubId = student.subject._id ? student.subject._id.toString() : student.subject.toString();
+                if (teacherSubjectNames.has(sSubStr) || teacherSubjectIds.has(sSubId)) {
+                    offersSubject = true;
+                }
+            }
+
+            // Check student's enrolledSubjects array
+            if (!offersSubject && Array.isArray(student.enrolledSubjects)) {
+                for (const item of student.enrolledSubjects) {
+                    if (!item || !item.subject) continue;
+                    const subObj = item.subject;
+                    const subId = (subObj._id || subObj).toString();
+                    const subName = (subObj.name || "").toString().trim().toLowerCase();
+
+                    if (teacherSubjectIds.has(subId) || teacherSubjectNames.has(subName)) {
+                        offersSubject = true;
+                        break;
+                    }
+                }
+            }
+
+            // Student does NOT offer the teacher's subject
+            if (!offersSubject) {
+                return false;
             }
         }
 
-        // 4. If teacher has class level but no subject
-        if (targetClassName && !teacher.subject) {
-            return true;
-        }
-
-        return false;
+        return true;
     });
 
     res.status(200).json({
         status: "Success",
-        message: "Students strictly in your class level fetched successfully",
+        message: "Students strictly in your class offering your subject fetched successfully",
         data: strictStudents,
         teacherClassLevel: targetClassName || null,
         teacherProgram: teacher.program || null,
@@ -1214,9 +1563,17 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
     if (student.enrolledSubjects && student.enrolledSubjects.length > 0) {
         for (const item of student.enrolledSubjects) {
             if (item.subject) {
-                const subObj = typeof item.subject === "object" ? item.subject : null;
+                let subObj = typeof item.subject === "object" && item.subject.name ? item.subject : null;
                 const subId = subObj ? subObj._id?.toString() : item.subject?.toString();
-                const subName = subObj ? subObj.name : "Subject";
+                if (!subObj && subId && mongoose.Types.ObjectId.isValid(subId)) {
+                    subObj = await Subject.findById(subId).populate("teacher academicTerms program");
+                }
+                if (!subObj && typeof item.subject === "string") {
+                    subObj = await Subject.findOne({
+                        name: { $regex: new RegExp(`^${item.subject.trim()}$`, "i") }
+                    }).populate("teacher academicTerms program");
+                }
+                const subName = subObj ? subObj.name : (typeof item.subject === "string" && !mongoose.Types.ObjectId.isValid(item.subject) ? item.subject : "Subject");
                 const cLevel = item.classLevel || student.currentClassLevel || "Level 100";
                 const dedupeKey = `${subId || subName}-${cLevel}`.toLowerCase();
 
@@ -1241,20 +1598,21 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
 
     // Backwards compatibility: From student.subject (legacy single subject)
     if (student.subject) {
-        const studentSubName = student.subject.trim();
+        let studentSubName = student.subject.trim();
+        let sDoc = null;
+        if (mongoose.Types.ObjectId.isValid(studentSubName)) {
+            sDoc = await Subject.findById(studentSubName).populate("teacher academicTerms program");
+            if (sDoc) studentSubName = sDoc.name;
+        } else {
+            sDoc = await Subject.findOne({
+                name: { $regex: new RegExp(`^${studentSubName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, "i") }
+            }).populate("teacher academicTerms program");
+        }
         const targetClass = student.currentClassLevel || "Level 100";
         const dedupeKey = `${studentSubName}-${targetClass}`.toLowerCase();
         
         const alreadyExists = Array.from(enrolledKeySet).some(k => k.startsWith(studentSubName.toLowerCase()));
         if (!alreadyExists) {
-            // Find subject doc if exists in DB
-            const sDoc = await Subject.findOne({
-                $or: [
-                    { name: studentSubName },
-                    { name: { $regex: new RegExp(`^${studentSubName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, "i") } }
-                ]
-            }).populate("teacher academicTerms program");
-
             enrolledKeySet.add(dedupeKey);
             const enrolledEntry = {
                 _id: sDoc?._id || new mongoose.Types.ObjectId(),
@@ -1448,63 +1806,85 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
     });
 });
 
-//@desc student self-enroll into subject for a specific class level
+//@desc student self-enroll into subject(s) for a specific class level
 //@route POST /api/v1/students/enroll-subject
 //@access private student only
 exports.studentEnrollSubjectCtrl = AsyncHandler(async (req, res) => {
     const studentId = req.userAuth?.id || req.userAuth?._id;
-    const { subjectId, classLevel } = req.body;
+    const { subjectId, subjectIds, classLevel } = req.body;
 
-    if (!subjectId) {
+    const idsToEnroll = Array.isArray(subjectIds)
+        ? subjectIds
+        : (subjectIds ? [subjectIds] : (subjectId ? [subjectId] : []));
+
+    if (idsToEnroll.length === 0) {
         throw new Error("Subject ID is required for enrollment");
     }
 
     const Subject = require("../../models/Academy/Subject");
-    const subjectDoc = await Subject.findById(subjectId);
-    if (!subjectDoc) {
-        throw new Error("Subject not found");
-    }
-
     const student = await Student.findById(studentId);
     if (!student) {
         throw new Error("Student not found");
     }
 
-    const targetClass = (classLevel || subjectDoc.classLevel || student.currentClassLevel || "Level 100").trim();
-
-    // Check if already enrolled in this subject for this class level
-    const alreadyEnrolled = student.enrolledSubjects?.some(
-        item => item.subject?.toString() === subjectDoc._id.toString() &&
-                item.classLevel?.toLowerCase() === targetClass.toLowerCase()
-    );
-
-    if (alreadyEnrolled) {
-        throw new Error(`You are already enrolled in ${subjectDoc.name} for ${targetClass}`);
-    }
-
-    // Add to enrolledSubjects
     if (!student.enrolledSubjects) {
         student.enrolledSubjects = [];
     }
-    student.enrolledSubjects.push({
-        subject: subjectDoc._id,
-        classLevel: targetClass,
-        dateEnrolled: new Date(),
-    });
 
-    // Also update legacy subject field if not set
-    if (!student.subject) {
-        student.subject = subjectDoc.name;
+    const newlyEnrolled = [];
+    const alreadyEnrolledNames = [];
+
+    for (const sId of idsToEnroll) {
+        if (!sId) continue;
+        const subjectDoc = await Subject.findById(sId);
+        if (!subjectDoc) continue;
+
+        const targetClass = (classLevel || subjectDoc.classLevel || student.currentClassLevel || "Level 100").trim();
+
+        // Check if already enrolled in this subject for this class level
+        const alreadyEnrolled = student.enrolledSubjects.some(
+            item => (item.subject?._id || item.subject)?.toString() === subjectDoc._id.toString() &&
+                    (item.classLevel || "").toLowerCase() === targetClass.toLowerCase()
+        );
+
+        if (alreadyEnrolled) {
+            alreadyEnrolledNames.push(subjectDoc.name);
+            continue;
+        }
+
+        student.enrolledSubjects.push({
+            subject: subjectDoc._id,
+            classLevel: targetClass,
+            dateEnrolled: new Date(),
+        });
+        newlyEnrolled.push(subjectDoc);
+
+        // Also update legacy subject field if not set
+        if (!student.subject) {
+            student.subject = subjectDoc.name;
+        }
+    }
+
+    if (newlyEnrolled.length === 0 && alreadyEnrolledNames.length > 0) {
+        throw new Error(`You are already enrolled in: ${alreadyEnrolledNames.join(", ")}`);
     }
 
     await student.save();
 
+    const enrolledNames = newlyEnrolled.map(s => s.name).join(", ");
+    let message = `Successfully enrolled in ${newlyEnrolled.length} subject(s)`;
+    if (newlyEnrolled.length === 1) {
+        message = `Successfully enrolled in ${newlyEnrolled[0].name} (${classLevel || newlyEnrolled[0].classLevel || "Level 100"})`;
+    } else if (newlyEnrolled.length > 1) {
+        message = `Successfully enrolled in: ${enrolledNames}`;
+    }
+
     res.status(200).json({
         status: "Success",
-        message: `Successfully enrolled in ${subjectDoc.name} (${targetClass})`,
+        message,
         data: {
-            subject: subjectDoc,
-            classLevel: targetClass,
+            newlyEnrolled,
+            totalEnrolled: student.enrolledSubjects.length,
         }
     });
 });
@@ -1603,5 +1983,91 @@ exports.fetchStudentClassExamsCtrl = AsyncHandler(async (req, res) => {
         status: "Success",
         message: "Student class exams fetched successfully",
         data: filtered,
+    });
+});
+
+//@desc Teacher lookup student by studentId
+//@route GET /api/v1/students/teacher/lookup/:studentId
+//@access private Teacher only
+exports.teacherLookupStudentCtrl = AsyncHandler(async (req, res) => {
+    const { studentId } = req.params;
+    if (!studentId || !studentId.trim()) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Student ID is required."
+        });
+    }
+
+    const teacher = await Teacher.findById(req.userAuth?._id);
+    if (!teacher) {
+        return res.status(404).json({
+            status: "failed",
+            message: "Teacher account not found."
+        });
+    }
+
+    // Find student by StudentId or _id
+    let student = null;
+    const cleanId = studentId.trim();
+    if (cleanId.match(/^[0-9a-fA-F]{24}$/)) {
+        student = await Student.findById(cleanId)
+            .populate("program academicYear assignedTeacher")
+            .populate("enrolledSubjects.subject");
+    }
+    if (!student) {
+        student = await Student.findOne({
+            StudentId: { $regex: new RegExp(`^${cleanId}$`, "i") }
+        })
+            .populate("program academicYear assignedTeacher")
+            .populate("enrolledSubjects.subject");
+    }
+
+    if (!student) {
+        return res.status(404).json({
+            status: "failed",
+            message: `Student with identifier "${cleanId}" was not found.`
+        });
+    }
+
+    // Strictly verify teacher access
+    const { isStudentInTeacherClassAndOfferingSubject, getTeacherSubjectInfo, extractLevelNumber } = require("../academic/examResultsCtrl");
+    const teacherSubjectInfo = await getTeacherSubjectInfo(teacher);
+
+    let targetClassName = (teacher.classLevel || "").toString().trim();
+    if (teacher.classLevel && mongoose.Types.ObjectId.isValid(teacher.classLevel)) {
+        const cDoc = await ClassLevel.findById(teacher.classLevel);
+        if (cDoc && cDoc.name) targetClassName = cDoc.name.trim();
+    }
+    const teacherLevelNumber = extractLevelNumber(targetClassName);
+
+    const isAllowed = isStudentInTeacherClassAndOfferingSubject(
+        student,
+        teacher,
+        teacherSubjectInfo,
+        targetClassName,
+        teacherLevelNumber
+    );
+
+    if (!isAllowed) {
+        return res.status(403).json({
+            status: "failed",
+            message: `Student "${student.name}" (${student.StudentId}) is not in your assigned class or does not offer your subject.`
+        });
+    }
+
+    res.status(200).json({
+        status: "Success",
+        message: "Student details retrieved successfully",
+        data: {
+            _id: student._id,
+            name: student.name,
+            StudentId: student.StudentId,
+            email: student.email,
+            currentClassLevel: student.currentClassLevel,
+            program: student.program,
+            programName: student.program?.name || "",
+            subject: student.subject,
+            enrolledSubjects: student.enrolledSubjects,
+        }
     });
 });

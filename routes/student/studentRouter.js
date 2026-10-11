@@ -16,7 +16,8 @@ const {
   fetchStudentEnrolledSubjectsCtrl,
   studentEnrollSubjectCtrl,
   studentUnenrollSubjectCtrl,
-  fetchStudentClassExamsCtrl
+  fetchStudentClassExamsCtrl,
+  teacherLookupStudentCtrl,
 } = require("../../controller/student/studentCtrl");
 const isStudentLogin = require("../../middlewares/isStudentLogin");
 const isStudent = require("../../middlewares/isStudent");
@@ -36,6 +37,7 @@ studentRoute.post("/reset-password", studentResetPasswordCtrl);
 studentRoute.post("/reset-password/:token", studentResetPasswordCtrl);
 studentRoute.get("/teacher", isTeacherLogin, isTeacher, fetchTeacherClassStudentsCtrl);
 studentRoute.get("/teacher/class-students", isTeacherLogin, isTeacher, fetchTeacherClassStudentsCtrl);
+studentRoute.get("/teacher/lookup/:studentId", isTeacherLogin, isTeacher, teacherLookupStudentCtrl);
 studentRoute.get("/admin", isAuthenticated(Admin), roleRestriction("admin"), fetchAllStudentsAdmin);
 studentRoute.get("/:studentID/admin", isAuthenticated(Admin), roleRestriction("admin"), fetchStudentAdmin);
 studentRoute.route("/profile")

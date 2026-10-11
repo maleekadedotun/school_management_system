@@ -18,6 +18,10 @@ const attendanceRouter = require("../routes/academic/attendanceRouter");
 const classReportRouter = require("../routes/academic/classReportRouter");
 const notificationRouter = require("../routes/staff/notificationRouter");
 const assignmentRouter = require("../routes/academic/assignmentRouter");
+const lessonNoteRouter = require("../routes/academic/lessonNoteRouter");
+const timetableRouter = require("../routes/academic/timetableRouter");
+const announcementRouter = require("../routes/staff/announcementRouter");
+const reportCardRouter = require("../routes/academic/reportCardRouter");
 const Student = require("../models/Academy/Student");
 // const academicTermRouter = require("../routes/academic/academicTermRouter");
 
@@ -78,6 +82,10 @@ app.use("/api/v1/attendance", attendanceRouter);
 app.use("/api/v1/class-reports", classReportRouter);
 app.use("/api/v1/notifications", notificationRouter);
 app.use("/api/v1/assignments", assignmentRouter);
+app.use("/api/v1/lesson-notes", lessonNoteRouter);
+app.use("/api/v1/timetables", timetableRouter);
+app.use("/api/v1/announcements", announcementRouter);
+app.use("/api/v1/report-cards", reportCardRouter);
 
 
 // ✅ root route

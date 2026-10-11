@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+require("../Academy/Subject");
 
 const teacherSchema = new mongoose.Schema(
     {
@@ -63,6 +64,11 @@ const teacherSchema = new mongoose.Schema(
             ref: "Subject",
             // required: true
         },
+
+        subjects: [{
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Subject",
+        }],
 
         applicationStatus:{
             type: String,

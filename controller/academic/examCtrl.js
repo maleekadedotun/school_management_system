@@ -27,6 +27,8 @@ exports.createExamCtrl = AsyncHandler(async(req, res) =>{
         examType,
         classLevel,
         academicYear,
+        passMark,
+        totalMark,
     } = req.body;
 
     // find teacher or admin
@@ -46,6 +48,10 @@ exports.createExamCtrl = AsyncHandler(async(req, res) =>{
         throw new Error("Exam already exists");
     }
 
+    const isTestType = ["test", "quiz", "continuous assessment", "ca"].includes((examType || "").toLowerCase());
+    const effectiveTotalMark = totalMark !== undefined && totalMark !== null ? Number(totalMark) : (isTestType ? 30 : 70);
+    const effectivePassMark = passMark !== undefined && passMark !== null ? Number(passMark) : (isTestType ? 15 : 40);
+
     const examCreated = new Exam({
         name,
         description,
@@ -56,7 +62,9 @@ exports.createExamCtrl = AsyncHandler(async(req, res) =>{
         duration,
         examDate,
         examTime,
-        examType,
+        examType: examType || (isTestType ? "Test" : "Exam"),
+        totalMark: effectiveTotalMark,
+        passMark: effectivePassMark,
         program,
         createdBy: req.userAuth._id,
     });
@@ -214,7 +222,12 @@ const filterExamsForStudent = (exams, student) => {
         const examCreatorRole = (exam.createdBy?.role || "").toLowerCase();
 
         // Admin exams are ALWAYS open to eligible students
-        const isAdminExam = examCreatorRole === "admin" || examCreatorName.includes("administration") || (!examCreatorId && !examCreatorName);
+        const isAdminExam =
+            examCreatorRole === "admin" ||
+            examCreatorName.includes("admin") ||
+            examCreatorName.includes("administration") ||
+            (!examCreatorId && !examCreatorName) ||
+            Boolean(exam.isAdminExam);
 
         // If the subject is part of the student's assigned program, allow exam created by any teacher assigned to that program or subject
         if (isUnderStudentProgram || isAdminExam) {
@@ -481,6 +494,8 @@ exports.updateExamCtrl = AsyncHandler(async(req, res) => {
         examType,
         classLevel,
         academicYear,
+        passMark,
+        totalMark,
     } = req.body;
 
     const existingExam = await Exam.findById(req.params.id);
@@ -496,6 +511,26 @@ exports.updateExamCtrl = AsyncHandler(async(req, res) => {
         }
     }
 
+    const resolvedExamType = examType || existingExam.examType;
+    const isTestType = ["test", "quiz", "continuous assessment", "ca"].includes((resolvedExamType || "").toLowerCase());
+    let effectiveTotalMark = totalMark !== undefined && totalMark !== null ? Number(totalMark) : undefined;
+    let effectivePassMark = passMark !== undefined && passMark !== null ? Number(passMark) : undefined;
+
+    if (effectiveTotalMark === undefined) {
+        if (examType && examType !== existingExam.examType) {
+            effectiveTotalMark = isTestType ? 30 : 70;
+        } else {
+            effectiveTotalMark = existingExam.totalMark !== undefined ? existingExam.totalMark : (isTestType ? 30 : 70);
+        }
+    }
+    if (effectivePassMark === undefined) {
+        if (examType && examType !== existingExam.examType) {
+            effectivePassMark = isTestType ? 15 : 40;
+        } else {
+            effectivePassMark = existingExam.passMark !== undefined ? existingExam.passMark : (isTestType ? 15 : 40);
+        }
+    }
+
     const examUpdated = await Exam.findByIdAndUpdate(
         req.params.id,
         {
@@ -508,6 +543,8 @@ exports.updateExamCtrl = AsyncHandler(async(req, res) => {
             examDate: examDate || existingExam.examDate,
             examTime: examTime || existingExam.examTime,
             examType: examType || existingExam.examType,
+            totalMark: effectiveTotalMark,
+            passMark: effectivePassMark,
             classLevel: classLevel || existingExam.classLevel,
             academicYear: academicYear || existingExam.academicYear,
         },

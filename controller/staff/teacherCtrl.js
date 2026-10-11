@@ -16,18 +16,58 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
     if (!adminFound) {
         throw new Error("Admin not found")
     }
-    const {name, password, email, subject, classLevel, program} = req.body;
+    const {name, password, email, subject, subjects, classLevel, program} = req.body;
     const teacher = await Teacher.findOne({email});
     if (teacher) {
         throw new Error("teacher already exist");
     }
 
     const hashPassword = await hashedPassword(password);
+
+    // Resolve subjects for multi-subject support
+    const Subject = require("../../models/Academy/Subject");
+    const mongoose = require("mongoose");
+    const rawSubjects = [
+        ...(Array.isArray(subjects) ? subjects : (subjects ? [subjects] : [])),
+        ...(Array.isArray(req.body.subjectIds) ? req.body.subjectIds : (req.body.subjectIds ? [req.body.subjectIds] : [])),
+        ...(Array.isArray(subject) ? subject : (subject ? [subject] : []))
+    ];
+    const resolvedSubjectIds = [];
+    const resolvedSubjectNames = [];
+
+    for (const s of rawSubjects) {
+        if (!s) continue;
+        const sStr = typeof s === "object" && s._id ? s._id.toString() : s.toString().trim();
+        if (!sStr) continue;
+        let sDoc = null;
+        if (mongoose.Types.ObjectId.isValid(sStr)) {
+            sDoc = await Subject.findById(sStr);
+        }
+        if (!sDoc) {
+            const escaped = sStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${escaped}$`, "i") } });
+        }
+        if (!sDoc) {
+            sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${sStr.trim()}$`, "i") } });
+        }
+        if (sDoc) {
+            if (!resolvedSubjectIds.some(id => id.toString() === sDoc._id.toString())) {
+                resolvedSubjectIds.push(sDoc._id);
+                resolvedSubjectNames.push(sDoc.name);
+            }
+        } else if (typeof s === "string" && s.trim() && !mongoose.Types.ObjectId.isValid(s.trim())) {
+            resolvedSubjectNames.push(s.trim());
+        }
+    }
+
+    const primarySubject = resolvedSubjectNames[0] || (typeof subject === "string" ? subject : "");
+
     const teacherCreated = await Teacher.create({
         name,
         email,
         password: hashPassword,
-        subject,
+        subject: primarySubject,
+        subjects: resolvedSubjectIds,
         classLevel,
         program,
     });
@@ -36,13 +76,29 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
     // save
     await adminFound.save();
 
+    // Link subjects to this teacher
+    if (resolvedSubjectIds.length > 0) {
+        await Subject.updateMany(
+            { _id: { $in: resolvedSubjectIds } },
+            { $set: { teacher: teacherCreated._id } }
+        );
+    }
+
     // Auto-link any existing students with matching subject & class level, or matching subject
-    if (subject) {
+    const allTeacherSubjectNames = [
+        ...(primarySubject ? [primarySubject] : []),
+        ...resolvedSubjectNames
+    ].filter(Boolean);
+
+    if (allTeacherSubjectNames.length > 0 || resolvedSubjectIds.length > 0) {
         try {
             const Student = require("../../models/Academy/Student");
-            const subjectQuery = [
-                { subject: subject },
-                { subject: { $regex: new RegExp(`^${subject.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } }
+            const subjectQueries = [
+                ...allTeacherSubjectNames.flatMap(sName => [
+                    { subject: sName },
+                    { subject: { $regex: new RegExp(`^${sName.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } },
+                ]),
+                ...(resolvedSubjectIds.length > 0 ? [{ "enrolledSubjects.subject": { $in: resolvedSubjectIds } }] : [])
             ];
 
             if (classLevel) {
@@ -55,7 +111,7 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
                 await Student.updateMany(
                     {
                         $and: [
-                            { $or: subjectQuery },
+                            { $or: subjectQueries },
                             { $or: classQuery }
                         ]
                     },
@@ -63,7 +119,7 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
                 );
             } else {
                 await Student.updateMany(
-                    { $or: subjectQuery },
+                    { $or: subjectQueries },
                     { $set: { assignedTeacher: teacherCreated._id } }
                 );
             }
@@ -72,10 +128,12 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
         }
     }
     
+    const populatedTeacher = await Teacher.findById(teacherCreated._id).populate("subjects");
+    
     res.status(201).json({
         status: "Success",
         message: "Teacher created successfully",
-        data: teacherCreated,
+        data: populatedTeacher || teacherCreated,
     })
 });
 
@@ -85,7 +143,7 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
 
 exports.teacherLogin = AsyncHandler(async(req, res) => {
     const {email, password} = req.body;
-    const teacher = await Teacher.findOne({email});
+    const teacher = await Teacher.findOne({email}).populate("subjects");
     if (!teacher) {
         return res.status(401).json({ message: "Invalid login credentials" });
     }
@@ -105,6 +163,10 @@ exports.teacherLogin = AsyncHandler(async(req, res) => {
             name: teacher.name,
             email: teacher.email,
             role: teacher.role || "teacher",
+            subject: teacher.subject,
+            subjects: teacher.subjects || [],
+            classLevel: teacher.classLevel,
+            program: teacher.program,
         }
     });
 });
@@ -131,7 +193,7 @@ exports.fetchAllTeachersAdmin = AsyncHandler(async(req, res) =>{
 
 exports.fetchTeacherAdmin = AsyncHandler(async(req, res) =>{
     const teacherID = req.params.teacherID
-    const teacher = await Teacher.findById(teacherID);
+    const teacher = await Teacher.findById(teacherID).populate("subjects");
     if (!teacher) {
         throw new Error("Teacher not found")
     }
@@ -148,7 +210,9 @@ exports.fetchTeacherAdmin = AsyncHandler(async(req, res) =>{
 
 exports.fetchTeacherProfile = AsyncHandler(async(req, res) =>{
     const teacherId = req.userAuth?._id || req.userAuth?.id || req.userAuth;
-    const teacher = await Teacher.findById(teacherId).select("-password -createdAt -updatedAt");
+    const teacher = await Teacher.findById(teacherId)
+        .select("-password -createdAt -updatedAt")
+        .populate("subjects");
     if (!teacher) {
         throw new Error("Teacher not found")
     }
@@ -279,7 +343,7 @@ exports.updateTeacherCtrl = AsyncHandler(async(req,res) => {
 // });
 
 exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
-    const { name, email, program, subject, academicYear, classLevel } = req.body;
+    const { name, email, program, subject, subjects, subjectIds, academicYear, classLevel } = req.body;
     const teacherFound = await Teacher.findById(req.params.teacherID);
 
     if (!teacherFound) {
@@ -304,10 +368,6 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
         teacherFound.program = program;
         updated = true;
     }
-    if (subject !== undefined) {
-        teacherFound.subject = subject;
-        updated = true;
-    }
     if (classLevel !== undefined) {
         teacherFound.classLevel = classLevel;
         updated = true;
@@ -315,6 +375,66 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
     if (academicYear !== undefined) {
         teacherFound.academicYear = academicYear;
         updated = true;
+    }
+
+    const Subject = require("../../models/Academy/Subject");
+    const mongoose = require("mongoose");
+    let resolvedSubjectIds = [];
+    let resolvedSubjectNames = [];
+
+    // Support both `subjects` (array), `subjectIds` (array), and `subject` (string or array)
+    if (subjects !== undefined || subjectIds !== undefined || subject !== undefined) {
+        const rawSubs = [
+            ...(Array.isArray(subjects) ? subjects : (subjects ? [subjects] : [])),
+            ...(Array.isArray(subjectIds) ? subjectIds : (subjectIds ? [subjectIds] : [])),
+            ...(Array.isArray(subject) ? subject : (subject ? [subject] : []))
+        ];
+
+        for (const s of rawSubs) {
+            if (!s) continue;
+            const sStr = typeof s === "object" && s._id ? s._id.toString() : s.toString().trim();
+            if (!sStr) continue;
+            let sDoc = null;
+            if (mongoose.Types.ObjectId.isValid(sStr)) {
+                sDoc = await Subject.findById(sStr);
+            }
+            if (!sDoc) {
+                const escaped = sStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+                sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${escaped}$`, "i") } });
+            }
+            if (!sDoc) {
+                sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${sStr.trim()}$`, "i") } });
+            }
+            if (sDoc) {
+                if (!resolvedSubjectIds.some(id => id.toString() === sDoc._id.toString())) {
+                    resolvedSubjectIds.push(sDoc._id);
+                    resolvedSubjectNames.push(sDoc.name);
+                }
+            } else if (typeof s === "string" && s.trim() && !mongoose.Types.ObjectId.isValid(s.trim())) {
+                resolvedSubjectNames.push(s.trim());
+            }
+        }
+
+        teacherFound.subjects = resolvedSubjectIds;
+        teacherFound.subject = resolvedSubjectNames[0] || (typeof subject === "string" ? subject : "");
+        updated = true;
+
+        // Assign teacher in Subject models and unassign removed subjects
+        if (resolvedSubjectIds.length > 0) {
+            await Subject.updateMany(
+                { _id: { $in: resolvedSubjectIds } },
+                { $set: { teacher: teacherFound._id } }
+            );
+            await Subject.updateMany(
+                { teacher: teacherFound._id, _id: { $nin: resolvedSubjectIds } },
+                { $unset: { teacher: 1 } }
+            );
+        } else {
+            await Subject.updateMany(
+                { teacher: teacherFound._id },
+                { $unset: { teacher: 1 } }
+            );
+        }
     }
 
     if (!updated) {
@@ -330,7 +450,6 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
     if (program) {
         try {
             const Program = require("../../models/Academy/program");
-            const mongoose = require("mongoose");
             const query = [
                 { name: program },
                 ...(mongoose.Types.ObjectId.isValid(program) ? [{ _id: program }] : [])
@@ -346,13 +465,21 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
         }
     }
 
-    // Auto-link any students matching this teacher's subject and class level, or matching subject
-    if (teacherFound.subject) {
+    // Auto-link any students matching this teacher's subjects and class level
+    const allTeacherSubjectNames = [
+        ...(teacherFound.subject ? [teacherFound.subject] : []),
+        ...resolvedSubjectNames
+    ].filter(Boolean);
+
+    if (allTeacherSubjectNames.length > 0 || (teacherFound.subjects && teacherFound.subjects.length > 0)) {
         try {
             const Student = require("../../models/Academy/Student");
-            const subjectQuery = [
-                { subject: teacherFound.subject },
-                { subject: { $regex: new RegExp(`^${teacherFound.subject.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } }
+            const subjectQueries = [
+                ...allTeacherSubjectNames.flatMap(sName => [
+                    { subject: sName },
+                    { subject: { $regex: new RegExp(`^${sName.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } }
+                ]),
+                ...(teacherFound.subjects && teacherFound.subjects.length > 0 ? [{ "enrolledSubjects.subject": { $in: teacherFound.subjects } }] : [])
             ];
 
             if (teacherFound.classLevel) {
@@ -365,7 +492,7 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
                 await Student.updateMany(
                     {
                         $and: [
-                            { $or: subjectQuery },
+                            { $or: subjectQueries },
                             { $or: classQuery }
                         ]
                     },
@@ -373,7 +500,7 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
                 );
             } else {
                 await Student.updateMany(
-                    { $or: subjectQuery },
+                    { $or: subjectQueries },
                     { $set: { assignedTeacher: teacherFound._id } }
                 );
             }
@@ -382,9 +509,11 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
         }
     }
 
+    const populatedTeacher = await Teacher.findById(teacherFound._id).populate("subjects");
+
     res.status(200).json({
         status: "Success",
-        data: teacherFound,
+        data: populatedTeacher || teacherFound,
         message: "Teacher updated successfully",
     });
 });

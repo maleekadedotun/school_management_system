@@ -27,13 +27,13 @@ const examSchema = new mongoose.Schema(
         passMark:{
             type: Number,
             required: true,
-            default: 50,
+            default: 40,
         },
 
         totalMark:{
             type: Number,
             required: true,
-            default: 100,
+            default: 70,
         },
 
         academicTerm:{
@@ -62,7 +62,7 @@ const examSchema = new mongoose.Schema(
         examType:{
             type: String,
             required: true,
-            default: "Quiz",
+            default: "Exam",
         },
 
         examStatus:{
@@ -103,6 +103,20 @@ const examSchema = new mongoose.Schema(
         timestamps: true,
     }
 );
+
+// Auto-adjust passMark and totalMark based on examType if not explicitly customized
+examSchema.pre("validate", function(next) {
+    const isTest = ["test", "quiz", "continuous assessment", "ca"].includes((this.examType || "").toLowerCase());
+    if (this.isNew || this.isModified("examType")) {
+        if (!this.totalMark || this.totalMark === 100 || (isTest && this.totalMark === 70) || (!isTest && this.totalMark === 30)) {
+            this.totalMark = isTest ? 30 : 70;
+        }
+        if (!this.passMark || this.passMark === 50 || (isTest && this.passMark === 40) || (!isTest && this.passMark === 15)) {
+            this.passMark = isTest ? 15 : 40;
+        }
+    }
+    next();
+});
 
 // model
 // compile

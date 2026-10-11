@@ -13,6 +13,13 @@ const examResultsSchema = new mongoose.Schema(
             required: true,
         },
 
+        examsTaken: [
+            {
+                type: mongoose.Schema.Types.ObjectId,
+                ref: "Exam",
+            }
+        ],
+
         grade:{
             type: Number,
             required: true,
@@ -56,15 +63,50 @@ const examResultsSchema = new mongoose.Schema(
             default: "Poor",
         },
 
-        // position:{
-        //     type: Number,
-        //     required: true,
-        // },
+        testScore: {
+            type: Number,
+            default: 0,
+        },
 
-        // subject:{
-        //     type: String,
-        //     ref: "Subject",
-        // },
+        examScore: {
+            type: Number,
+            default: 0,
+        },
+
+        position: {
+            type: Number,
+            default: null,
+        },
+
+        positionFormatted: {
+            type: String,
+            default: "",
+        },
+
+        subject: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Subject",
+        },
+
+        subjectName: {
+            type: String,
+            default: "",
+        },
+
+        program: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Program",
+        },
+
+        programName: {
+            type: String,
+            default: "",
+        },
+
+        currentClassLevel: {
+            type: String,
+            default: "",
+        },
 
         classLevel:{
             type: mongoose.Schema.Types.ObjectId,

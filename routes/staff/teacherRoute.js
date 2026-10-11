@@ -16,6 +16,7 @@ const isTeacherLogin = require("../../middlewares/isTeacherLogin");
 const isTeacher = require("../../middlewares/isTeacher");
 const advanceResults = require("../../middlewares/advanceResults");
 const Teacher = require("../../models/Staff/Teacher");
+const Subject = require("../../models/Academy/Subject");
 const isAuthenticated = require("../../middlewares/isAuthenticated");
 const Admin = require("../../models/Staff/admin");
 const roleRestriction = require("../../middlewares/roleRestriction");
@@ -30,12 +31,17 @@ teacherRoute.post("/reset-password", teacherResetPasswordCtrl);
 teacherRoute.post("/reset-password/:token", teacherResetPasswordCtrl);
 
 teacherRoute.get("/admin", isAuthenticated(Admin), isAdmin,
-advanceResults(Teacher, {
-    path: "examsCreated",
-    populate: {
-        path: "questions",
+advanceResults(Teacher, [
+    {
+        path: "examsCreated",
+        populate: {
+            path: "questions",
+        }
+    },
+    {
+        path: "subjects"
     }
-}),
+]),
 fetchAllTeachersAdmin);
 
 teacherRoute.get("/profile", isAuthenticated(Teacher), roleRestriction("teacher"), fetchTeacherProfile);
