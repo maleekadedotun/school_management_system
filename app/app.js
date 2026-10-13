@@ -22,13 +22,23 @@ const lessonNoteRouter = require("../routes/academic/lessonNoteRouter");
 const timetableRouter = require("../routes/academic/timetableRouter");
 const announcementRouter = require("../routes/staff/announcementRouter");
 const reportCardRouter = require("../routes/academic/reportCardRouter");
+const financeRouter = require("../routes/academic/financeRouter");
+const parentRouter = require("../routes/staff/parentRouter");
+// School Finance & Bursary Routes mounted
 const Student = require("../models/Academy/Student");
 // const academicTermRouter = require("../routes/academic/academicTermRouter");
 
 const app = express();
 // middlewares
 app.use(morgan("dev"));
-app.use(express.json({ limit: "25mb" }));
+app.use(
+  express.json({
+    limit: "25mb",
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 app.use(cors({
     origin: "*",
@@ -86,6 +96,8 @@ app.use("/api/v1/lesson-notes", lessonNoteRouter);
 app.use("/api/v1/timetables", timetableRouter);
 app.use("/api/v1/announcements", announcementRouter);
 app.use("/api/v1/report-cards", reportCardRouter);
+app.use("/api/v1/finance", financeRouter);
+app.use("/api/v1/parents", parentRouter);
 
 
 // ✅ root route

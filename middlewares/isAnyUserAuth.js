@@ -1,6 +1,7 @@
 const Teacher = require("../models/Staff/Teacher");
 const Admin = require("../models/Staff/admin");
 const Student = require("../models/Academy/Student");
+const Parent = require("../models/Staff/Parent");
 const verifyToken = require("../utils/verifyToken");
 
 const isAnyUserAuth = async (req, res, next) => {
@@ -28,7 +29,11 @@ const isAnyUserAuth = async (req, res, next) => {
         }
         // Try Student
         if (!user) {
-            user = await Student.findById(verifiedToken.id).select("name email role StudentId");
+            user = await Student.findById(verifiedToken.id).select("name email role StudentId currentClassLevel");
+        }
+        // Try Parent
+        if (!user) {
+            user = await Parent.findById(verifiedToken.id).select("name email role parentId children");
         }
 
         if (!user) {

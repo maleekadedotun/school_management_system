@@ -34,6 +34,10 @@ const matchClassLevel = (cls1, cls2) => {
 //@route POST /api/v1/timetables
 //@access Private (Admin)
 exports.createTimetableCtrl = AsyncHandler(async (req, res) => {
+  if (!req.userAuth || req.userAuth.role !== "admin") {
+    res.status(403);
+    throw new Error("Access denied: Only administrators can create timetable schedules.");
+  }
   const {
     program,
     classLevel,
@@ -283,6 +287,10 @@ exports.getSingleTimetableCtrl = AsyncHandler(async (req, res) => {
 //@route PUT /api/v1/timetables/:id
 //@access Private (Admin)
 exports.updateTimetableCtrl = AsyncHandler(async (req, res) => {
+  if (!req.userAuth || req.userAuth.role !== "admin") {
+    res.status(403);
+    throw new Error("Access denied: Only administrators can modify timetable schedules.");
+  }
   const slotId = req.params.id;
   const slot = await Timetable.findById(slotId);
   if (!slot) {
@@ -398,6 +406,10 @@ exports.updateTimetableCtrl = AsyncHandler(async (req, res) => {
 //@route DELETE /api/v1/timetables/:id
 //@access Private (Admin)
 exports.deleteTimetableCtrl = AsyncHandler(async (req, res) => {
+  if (!req.userAuth || req.userAuth.role !== "admin") {
+    res.status(403);
+    throw new Error("Access denied: Only administrators can delete timetable schedules.");
+  }
   const slot = await Timetable.findById(req.params.id);
   if (!slot) {
     res.status(404);

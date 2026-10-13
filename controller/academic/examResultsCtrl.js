@@ -14,6 +14,10 @@ const extractLevelNumber = (str) => {
     return match ? match[0] : null;
 };
 
+const safeEscapeRegex = (str) => {
+    return (str || "").toString().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
 // Helper to resolve all Subject IDs and lowercase Subject names associated with a teacher
 const getTeacherSubjectInfo = async (teacher) => {
     const teacherSubjectIds = new Set();
@@ -48,7 +52,7 @@ const getTeacherSubjectInfo = async (teacher) => {
 
     const subjectQueryConditions = [{ teacher: teacher._id }];
     if (teacher.subject) {
-        const escaped = teacher.subject.toString().trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        const escaped = safeEscapeRegex(teacher.subject);
         subjectQueryConditions.push({ name: { $regex: new RegExp(`^${escaped}$`, "i") } });
         if (mongoose.Types.ObjectId.isValid(teacher.subject)) {
             subjectQueryConditions.push({ _id: teacher.subject });
@@ -152,7 +156,7 @@ const recalculateSubjectPositions = async ({ subjectId, subjectName, classLevelI
             subOr.push({ subject: subjectId });
         }
         if (subjectName && typeof subjectName === "string" && subjectName.trim()) {
-            const esc = subjectName.trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            const esc = safeEscapeRegex(subjectName);
             subOr.push({ subjectName: { $regex: new RegExp(`^${esc}$`, "i") } });
             subOr.push({ "exam.subject.name": { $regex: new RegExp(`^${esc}$`, "i") } });
         }
@@ -804,7 +808,7 @@ exports.teacherEnterExamResultCtrl = AsyncHandler(async (req, res) => {
             resolvedSubject = await Subject.findById(incomingSubjectId);
         }
         if (!resolvedSubject && incomingSubjectName) {
-            const esc = incomingSubjectName.trim().replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            const esc = safeEscapeRegex(incomingSubjectName);
             resolvedSubject = await Subject.findOne({ name: { $regex: new RegExp(`^${esc}$`, "i") } });
         }
 
@@ -1271,7 +1275,7 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
     const teacherLevelNumber = extractLevelNumber(targetClassName);
     const levelRegex = teacherLevelNumber
         ? new RegExp(`(^|\\b|\\D)${teacherLevelNumber}(\\D|\\b|$)`, "i")
-        : targetClassName ? new RegExp(`^${targetClassName.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&')}$`, "i") : null;
+        : targetClassName ? new RegExp(`^${safeEscapeRegex(targetClassName)}$`, "i") : null;
 
     // Filter students strictly in teacher's class offering the teacher's subject alone
     const studentOr = [];
@@ -1282,7 +1286,7 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
     }
     if (teacherSubjectInfo.hasTeacherSubject) {
         Array.from(teacherSubjectInfo.teacherSubjectNames).forEach(name => {
-            const esc = name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            const esc = safeEscapeRegex(name);
             studentOr.push({ subject: { $regex: new RegExp(`^${esc}$`, "i") } });
         });
         if (teacherSubjectInfo.teacherSubjectIds.size > 0) {

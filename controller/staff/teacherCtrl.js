@@ -4,7 +4,10 @@ const Teacher = require("../../models/Staff/Teacher");
 const { hashedPassword, isPasswordMatched } = require("../../utils/helpers");
 const generateToken = require("../../utils/generateToken");
 const Admin = require("../../models/Staff/admin");
-// const Admin = require("../../models/Staff/admin");
+
+const safeEscapeRegex = (str) => {
+    return (str || "").toString().trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
 
 //@desc register teacher
 //@route POST /api/v1/teacher/admin/register
@@ -44,7 +47,7 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
             sDoc = await Subject.findById(sStr);
         }
         if (!sDoc) {
-            const escaped = sStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            const escaped = safeEscapeRegex(sStr);
             sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${escaped}$`, "i") } });
         }
         if (!sDoc) {
@@ -96,7 +99,7 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
             const subjectQueries = [
                 ...allTeacherSubjectNames.flatMap(sName => [
                     { subject: sName },
-                    { subject: { $regex: new RegExp(`^${sName.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } },
+                    { subject: { $regex: new RegExp(`^${safeEscapeRegex(sName)}$`, "i") } },
                 ]),
                 ...(resolvedSubjectIds.length > 0 ? [{ "enrolledSubjects.subject": { $in: resolvedSubjectIds } }] : [])
             ];
@@ -105,7 +108,7 @@ exports.adminRegisterTeacher = AsyncHandler(async(req, res) => {
                 const classDigits = classLevel.toString().match(/\d+/)?.[0];
                 const classQuery = [
                     { currentClassLevel: classLevel },
-                    { currentClassLevel: { $regex: new RegExp(`^${classLevel.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } },
+                    { currentClassLevel: { $regex: new RegExp(`^${safeEscapeRegex(classLevel)}$`, "i") } },
                     ...(classDigits ? [{ currentClassLevel: { $regex: new RegExp(`(^|\\b|\\D)${classDigits}(\\D|\\b|$)`, "i") } }] : [])
                 ];
                 await Student.updateMany(
@@ -187,20 +190,77 @@ exports.fetchAllTeachersAdmin = AsyncHandler(async(req, res) =>{
    
 });
 
+const resolveTeacherSubjects = async (teacher) => {
+    if (!teacher) return [];
+    const Subject = require("../../models/Academy/Subject");
+    const mongoose = require("mongoose");
+    const existingIds = new Set(
+        (teacher.subjects || []).map(s => (s && s._id ? s._id.toString() : s?.toString())).filter(Boolean)
+    );
+    const mergedSubjects = [...(teacher.subjects || [])];
+
+    // Find any subjects where teacher is assigned directly
+    const directlyAssigned = await Subject.find({ teacher: teacher._id })
+        .populate("program academicTerms");
+
+    for (const dSub of directlyAssigned) {
+        if (!existingIds.has(dSub._id.toString())) {
+            mergedSubjects.push(dSub);
+            existingIds.add(dSub._id.toString());
+        }
+    }
+
+    // Also check teacher.subject if it's a string/name or ObjectId
+    if (teacher.subject && typeof teacher.subject === "string") {
+        const subName = teacher.subject.trim();
+        const alreadyIn = mergedSubjects.some(
+            s => s?.name?.toLowerCase() === subName.toLowerCase() || s?._id?.toString() === subName
+        );
+        if (!alreadyIn) {
+            let namedSub = null;
+            if (mongoose.Types.ObjectId.isValid(subName)) {
+                namedSub = await Subject.findById(subName).populate("program academicTerms");
+            }
+            if (!namedSub) {
+                const escaped = safeEscapeRegex(subName);
+                namedSub = await Subject.findOne({ name: { $regex: new RegExp(`^${escaped}$`, "i") } })
+                    .populate("program academicTerms");
+            }
+            if (namedSub && !existingIds.has(namedSub._id.toString())) {
+                mergedSubjects.push(namedSub);
+                existingIds.add(namedSub._id.toString());
+            }
+        }
+    }
+
+    return mergedSubjects;
+};
+
 //@desc single teacher
 //@route GET /api/v1/teachers/:teacherID/admin/
 //@access public admin only
 
 exports.fetchTeacherAdmin = AsyncHandler(async(req, res) =>{
     const teacherID = req.params.teacherID
-    const teacher = await Teacher.findById(teacherID).populate("subjects");
+    const teacher = await Teacher.findById(teacherID).populate({
+        path: "subjects",
+        populate: [
+            { path: "program" },
+            { path: "academicTerms" }
+        ]
+    });
     if (!teacher) {
         throw new Error("Teacher not found")
     }
-    res.status(201).json({
+
+    const mergedSubjects = await resolveTeacherSubjects(teacher);
+    const teacherObj = teacher.toObject ? teacher.toObject() : { ...teacher };
+    teacherObj.subjects = mergedSubjects;
+
+    res.status(200).json({
         status: "Success",
         message: "Teacher fetched successfully",
-        data: teacher,
+        data: teacherObj,
     })
 });
 
@@ -212,15 +272,51 @@ exports.fetchTeacherProfile = AsyncHandler(async(req, res) =>{
     const teacherId = req.userAuth?._id || req.userAuth?.id || req.userAuth;
     const teacher = await Teacher.findById(teacherId)
         .select("-password -createdAt -updatedAt")
-        .populate("subjects");
+        .populate({
+            path: "subjects",
+            populate: [
+                { path: "program" },
+                { path: "academicTerms" }
+            ]
+        });
     if (!teacher) {
         throw new Error("Teacher not found")
     }
-    res.status(201).json({
+
+    const mergedSubjects = await resolveTeacherSubjects(teacher);
+    const teacherObj = teacher.toObject ? teacher.toObject() : { ...teacher };
+    teacherObj.subjects = mergedSubjects;
+
+    res.status(200).json({
         status: "Success",
         message: "Teacher profile fetched successfully",
-        data: teacher,
+        data: teacherObj,
     })
+});
+
+//@desc  teacher assigned subjects
+//@route GET /api/v1/teachers/my-subjects
+//@access private teacher only
+
+exports.fetchTeacherSubjectsCtrl = AsyncHandler(async(req, res) => {
+    const teacherId = req.userAuth?._id || req.userAuth?.id || req.userAuth;
+    const teacher = await Teacher.findById(teacherId).populate({
+        path: "subjects",
+        populate: [
+            { path: "program" },
+            { path: "academicTerms" }
+        ]
+    });
+    if (!teacher) {
+        throw new Error("Teacher not found");
+    }
+
+    const mergedSubjects = await resolveTeacherSubjects(teacher);
+    res.status(200).json({
+        status: "Success",
+        message: "Teacher subjects fetched successfully",
+        data: mergedSubjects,
+    });
 });
 
 //@desc  teacher update profile 
@@ -399,7 +495,7 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
                 sDoc = await Subject.findById(sStr);
             }
             if (!sDoc) {
-                const escaped = sStr.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+                const escaped = safeEscapeRegex(sStr);
                 sDoc = await Subject.findOne({ name: { $regex: new RegExp(`^${escaped}$`, "i") } });
             }
             if (!sDoc) {
@@ -477,7 +573,7 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
             const subjectQueries = [
                 ...allTeacherSubjectNames.flatMap(sName => [
                     { subject: sName },
-                    { subject: { $regex: new RegExp(`^${sName.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } }
+                    { subject: { $regex: new RegExp(`^${safeEscapeRegex(sName)}$`, "i") } }
                 ]),
                 ...(teacherFound.subjects && teacherFound.subjects.length > 0 ? [{ "enrolledSubjects.subject": { $in: teacherFound.subjects } }] : [])
             ];
@@ -486,7 +582,7 @@ exports.adminUpdateTeacherCtrl = AsyncHandler(async (req, res) => {
                 const classDigits = teacherFound.classLevel.toString().match(/\d+/)?.[0];
                 const classQuery = [
                     { currentClassLevel: teacherFound.classLevel },
-                    { currentClassLevel: { $regex: new RegExp(`^${teacherFound.classLevel.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, '\\$&')}$`, "i") } },
+                    { currentClassLevel: { $regex: new RegExp(`^${safeEscapeRegex(teacherFound.classLevel)}$`, "i") } },
                     ...(classDigits ? [{ currentClassLevel: { $regex: new RegExp(`(^|\\b|\\D)${classDigits}(\\D|\\b|$)`, "i") } }] : [])
                 ];
                 await Student.updateMany(

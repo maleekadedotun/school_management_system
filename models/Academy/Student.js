@@ -109,6 +109,17 @@ const studentSchema = new mongoose.Schema(
             ref: "Teacher",
         },
 
+        parent: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Parent",
+        },
+
+        parentEmail: {
+            type: String,
+            trim: true,
+            lowercase: true,
+        },
+
         
 
         academicYear:{

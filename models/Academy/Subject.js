@@ -36,7 +36,12 @@ const SubjectSchema = new mongoose.Schema(
 
         classLevel: {
             type: String,
-            default: "Level 100",
+            default: "",
+        },
+
+        isCore: {
+            type: Boolean,
+            default: false,
         },
 
         // duration: {

@@ -22,7 +22,7 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
         name,
         description,
         academicTerms,
-        classLevel: classLevel || "Level 100",
+        classLevel: classLevel || "",
         program: programFound._id,
         createdBy: req.userAuth._id,
     });
@@ -40,7 +40,7 @@ exports.createSubjectCtrl = AsyncHandler(async(req, res) => {
                 $addToSet: {
                     enrolledSubjects: {
                         subject: subjectCreated._id,
-                        classLevel: subjectCreated.classLevel || "Level 100",
+                        classLevel: subjectCreated.classLevel || "",
                         dateEnrolled: new Date(),
                     }
                 }

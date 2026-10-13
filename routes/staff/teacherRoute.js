@@ -9,6 +9,7 @@ const {
     fetchAllTeachersAdmin,
     fetchTeacherAdmin,
     fetchTeacherProfile,
+    fetchTeacherSubjectsCtrl,
     updateTeacherCtrl,
     adminUpdateTeacherCtrl
 } = require("../../controller/staff/teacherCtrl");
@@ -45,6 +46,7 @@ advanceResults(Teacher, [
 fetchAllTeachersAdmin);
 
 teacherRoute.get("/profile", isAuthenticated(Teacher), roleRestriction("teacher"), fetchTeacherProfile);
+teacherRoute.get("/my-subjects", isAuthenticated(Teacher), roleRestriction("teacher"), fetchTeacherSubjectsCtrl);
 teacherRoute.get("/:teacherID/admin", isAuthenticated(Admin), roleRestriction("admin"), fetchTeacherAdmin);
 teacherRoute.put("/update/profile", isAuthenticated(Teacher), roleRestriction("teacher"), updateTeacherCtrl);
 teacherRoute.put("/update", isAuthenticated(Teacher), roleRestriction("teacher"), updateTeacherCtrl);
