@@ -4,6 +4,7 @@ const isTeacher = require("../../middlewares/isTeacher");
 const isStudentLogin = require("../../middlewares/isStudentLogin");
 const isStudent = require("../../middlewares/isStudent");
 const isAnyUserAuth = require("../../middlewares/isAnyUserAuth");
+const roleRestriction = require("../../middlewares/roleRestriction");
 
 const {
   createAssignmentCtrl,
@@ -18,9 +19,18 @@ const {
   publishAssignmentCtrl,
   getTeacherAssignmentsCtrl,
   getStudentAssignmentsCtrl,
+  getParentChildrenAssignmentsCtrl,
 } = require("../../controller/academic/assignmentCtrl");
 
 const assignmentRouter = express.Router();
+
+// Parent specific routes (Monitor Only)
+assignmentRouter.get(
+  "/parent/children-assignments",
+  isAnyUserAuth,
+  roleRestriction("parent", "admin"),
+  getParentChildrenAssignmentsCtrl
+);
 
 // Student specific routes
 assignmentRouter.get("/student/my-submissions", isStudentLogin, isStudent, getStudentSubmissionsCtrl);

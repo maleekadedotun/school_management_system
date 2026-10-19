@@ -114,8 +114,10 @@ exports.generateClassInvoicesCtrl = AsyncHandler(async (req, res) => {
       subtotal,
       discount: discountInKobo,
       totalAmountDue: totalDue,
+      totalAmount: totalDue,
       amountPaid: 0,
       balanceDue: totalDue,
+      balanceAmount: totalDue,
       currency: feeStructure.currency || "NGN",
       status: "unpaid",
       dueDate: feeStructure.dueDate,
@@ -209,8 +211,10 @@ exports.generateSingleStudentInvoiceCtrl = AsyncHandler(async (req, res) => {
     subtotal,
     discount: discountInKobo,
     totalAmountDue: totalDue,
+    totalAmount: totalDue,
     amountPaid: 0,
     balanceDue: totalDue,
+    balanceAmount: totalDue,
     currency: feeStructure.currency || "NGN",
     status: "unpaid",
     dueDate: feeStructure.dueDate,
@@ -510,7 +514,9 @@ exports.updateInvoiceDiscountCtrl = AsyncHandler(async (req, res) => {
 
   invoice.discount = discountKobo;
   invoice.totalAmountDue = newTotalDue;
+  invoice.totalAmount = newTotalDue;
   invoice.balanceDue = newTotalDue - invoice.amountPaid;
+  invoice.balanceAmount = invoice.balanceDue;
 
   if (invoice.balanceDue === 0) {
     invoice.status = "paid";

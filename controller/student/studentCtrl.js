@@ -77,11 +77,34 @@ exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
         password: hashPassword,
     };
 
-    if (classLevels) {
-        const cLevel = Array.isArray(classLevels) ? classLevels[classLevels.length - 1] : classLevels;
-        studentData.currentClassLevel = cLevel;
-        studentData.classLevels = Array.isArray(classLevels) ? classLevels : [classLevels];
+    // Robust class level resolution from all possible fields (classLevels, classLevel, currentClassLevel, class, className)
+    const rawClass = req.body.classLevels ?? req.body.classLevel ?? req.body.currentClassLevel ?? req.body.class ?? req.body.className;
+    let cleanClassLevels = [];
+    if (Array.isArray(rawClass)) {
+        cleanClassLevels = rawClass
+            .map((c) => (typeof c === "string" ? c.trim() : (c?.name || c?._id?.toString() || c?.toString() || "").trim()))
+            .filter((c) => c && c !== "");
+    } else if (typeof rawClass === "string" && rawClass.trim()) {
+        cleanClassLevels = [rawClass.trim()];
+    } else if (rawClass && typeof rawClass === "object") {
+        const cName = (rawClass.name || rawClass._id?.toString() || "").trim();
+        if (cName) cleanClassLevels = [cName];
     }
+
+    if (cleanClassLevels.length > 0) {
+        let lastLevel = cleanClassLevels[cleanClassLevels.length - 1];
+        if (mongoose.Types.ObjectId.isValid(lastLevel)) {
+            const ClassLevel = require("../../models/Academy/ClassLevel");
+            const cDoc = await ClassLevel.findById(lastLevel);
+            if (cDoc && cDoc.name) {
+                lastLevel = cDoc.name;
+                cleanClassLevels[cleanClassLevels.length - 1] = cDoc.name;
+            }
+        }
+        studentData.currentClassLevel = lastLevel;
+        studentData.classLevels = cleanClassLevels;
+    }
+
     if (subject) {
         if (mongoose.Types.ObjectId.isValid(subject)) {
             const Subject = require("../../models/Academy/Subject");
@@ -129,7 +152,7 @@ exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
         }
     }
 
-    // Auto-pick program and auto-enroll student into ALL subjects under that program
+    // Link student to selected Program (only compulsory subjects are auto-enrolled below)
     let programFound = null;
     if (program) {
         if (mongoose.Types.ObjectId.isValid(program)) {
@@ -140,34 +163,6 @@ exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
 
         if (programFound) {
             studentData.program = programFound._id;
-
-            // Find all subjects belonging to this program
-            const Subject = require("../../models/Academy/Subject");
-            const progSubjects = await Subject.find({
-                $or: [
-                    { program: programFound._id },
-                    ...(Array.isArray(programFound.subjects) && programFound.subjects.length > 0 ? [{ _id: { $in: programFound.subjects } }] : [])
-                ]
-            });
-
-            // Automatically enroll student into every subject under this program
-            for (const pSub of progSubjects) {
-                const alreadyEnrolled = studentData.enrolledSubjects.some(
-                    e => (e.subject?._id || e.subject)?.toString() === pSub._id.toString()
-                );
-                if (!alreadyEnrolled) {
-                    studentData.enrolledSubjects.push({
-                        subject: pSub._id,
-                        classLevel: studentData.currentClassLevel || (pSub.classLevel && !pSub.classLevel.includes("100") ? pSub.classLevel : "") || "",
-                        dateEnrolled: new Date(),
-                    });
-                }
-            }
-
-            // If primary subject not set, default to first program subject
-            if (!studentData.subject && progSubjects.length > 0) {
-                studentData.subject = progSubjects[0].name;
-            }
         }
     }
 
@@ -184,6 +179,13 @@ exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
                 dateEnrolled: new Date(),
             });
         }
+    }
+
+    if (!studentData.subject && studentData.enrolledSubjects.length > 0) {
+        const firstSub = studentData.enrolledSubjects[0].subject;
+        const Subject = require("../../models/Academy/Subject");
+        const sDoc = await Subject.findById(firstSub);
+        studentData.subject = sDoc?.name || "Mathematics";
     }
 
     // Auto-pick teacher if subject and class are provided
@@ -233,6 +235,24 @@ exports.adminRegisterStudent = AsyncHandler(async (req, res) => {
     // student to admin
     adminFound.students.push(studentCreated?._id);
     await adminFound.save();
+
+    // Link student to ClassLevel document if assigned
+    if (studentData.currentClassLevel) {
+        try {
+            const ClassLevel = require("../../models/Academy/ClassLevel");
+            await ClassLevel.findOneAndUpdate(
+                {
+                    $or: [
+                        { name: studentData.currentClassLevel },
+                        { name: { $regex: new RegExp(`^${safeEscapeRegex(studentData.currentClassLevel)}$`, "i") } }
+                    ]
+                },
+                { $addToSet: { students: studentCreated._id } }
+            );
+        } catch (clErr) {
+            console.error("Error linking student to ClassLevel:", clErr);
+        }
+    }
 
     // Link student to Program document if assigned
     if (programFound) {
@@ -482,54 +502,44 @@ exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
         examsResults: student?.examsResults || [],
     };
 
-    // Auto-sync subjects under student's assigned program if not yet enrolled
-    if (student.program) {
-        const Subject = require("../../models/Academy/Subject");
-        const progId = student.program._id || student.program;
-        const progSubjects = await Subject.find({
-            $or: [
-                { program: progId },
-                ...(Array.isArray(student.program.subjects) && student.program.subjects.length > 0 ? [{ _id: { $in: student.program.subjects } }] : [])
-            ]
-        }).populate("teacher academicTerms program");
+    // Ensure compulsory core subjects (Mathematics and English) are present in profile if missing
+    const generalCoreSubjects = await resolveCoreSubjectsForStudent(student.program);
+    const enrolledSubIds = (student.enrolledSubjects || []).map(item =>
+        (item.subject?._id || item.subject)?.toString()
+    );
 
-        const enrolledSubIds = (student.enrolledSubjects || []).map(item =>
-            (item.subject?._id || item.subject)?.toString()
-        );
-
-        const newSyncItems = [];
-        for (const pSub of progSubjects) {
-            const pId = pSub._id.toString();
-            if (!enrolledSubIds.includes(pId)) {
-                const entry = {
-                    subject: pSub,
-                    classLevel: student.currentClassLevel || (pSub.classLevel && !pSub.classLevel.includes("100") ? pSub.classLevel : "") || "",
-                    dateEnrolled: student.dateAdmitted || new Date(),
-                };
-                studentProfile.enrolledSubjects.push(entry);
-                newSyncItems.push({
-                    subject: pSub._id,
-                    classLevel: student.currentClassLevel || (pSub.classLevel && !pSub.classLevel.includes("100") ? pSub.classLevel : "") || "",
-                    dateEnrolled: new Date(),
-                });
-            }
+    const newSyncItems = [];
+    for (const cSub of generalCoreSubjects) {
+        const cId = cSub._id.toString();
+        if (!enrolledSubIds.includes(cId)) {
+            const entry = {
+                subject: cSub,
+                classLevel: student.currentClassLevel || (cSub.classLevel && !cSub.classLevel.includes("100") ? cSub.classLevel : "") || "",
+                dateEnrolled: student.dateAdmitted || new Date(),
+            };
+            studentProfile.enrolledSubjects.push(entry);
+            newSyncItems.push({
+                subject: cSub._id,
+                classLevel: student.currentClassLevel || (cSub.classLevel && !cSub.classLevel.includes("100") ? cSub.classLevel : "") || "",
+                dateEnrolled: new Date(),
+            });
         }
+    }
 
-        if (newSyncItems.length > 0) {
-            try {
-                await Student.findByIdAndUpdate(student._id, {
-                    $addToSet: { enrolledSubjects: { $each: newSyncItems } }
-                });
-            } catch (err) {
-                console.error("Error auto-syncing program subjects in profile:", err);
-            }
+    if (newSyncItems.length > 0) {
+        try {
+            await Student.findByIdAndUpdate(student._id, {
+                $addToSet: { enrolledSubjects: { $each: newSyncItems } }
+            });
+        } catch (err) {
+            console.error("Error auto-syncing core subjects in profile:", err);
         }
     }
 
     // get student exam results - students can ONLY see results that are published by admin
     const allExamResults = student?.examsResults || [];
     const publishedResults = allExamResults.filter(r => r?.isPublished === true);
-    const hasPendingReview = allExamResults.some(r => r?.isPublished === false);
+    const hasPendingReview = allExamResults.some(r => r?.isPublished !== true);
     const currentExamResult = publishedResults[publishedResults.length - 1] || null;
 
     // Distinguish two-tier pending review statuses:
@@ -545,6 +555,9 @@ exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
             .filter(Boolean)
     )];
 
+    // CRITICAL: studentProfile.examsResults MUST ONLY expose admin-approved published results!
+    studentProfile.examsResults = publishedResults;
+
     res.status(200).json({
         status: "Success",
         message: "Student profile fetched successfully",
@@ -552,7 +565,7 @@ exports.fetchStudentProfile = AsyncHandler(async (req, res) => {
             studentProfile,
             currentExamResult: currentExamResult,
             examResults: publishedResults,
-            allExamResults: allExamResults,
+            allExamResults: publishedResults,
             writtenExamIds: writtenExamIds,
             hasPendingReview: hasPendingReview,
             pendingTeacherReviewCount: pendingTeacherReview.length,
@@ -755,10 +768,45 @@ exports.adminUpdateStudentCtrl = AsyncHandler(async (req, res) => {
     }
 
     // Set class level and track history
-    if (classLevels) {
-        updateSet.currentClassLevel = classLevels;
-        if (!updateOps.$addToSet) updateOps.$addToSet = {};
-        updateOps.$addToSet.classLevels = classLevels;
+    const updateClassRaw = classLevels ?? req.body.classLevel ?? req.body.currentClassLevel ?? req.body.class ?? req.body.className;
+    if (updateClassRaw) {
+        let cleanUpdateClass = "";
+        if (Array.isArray(updateClassRaw)) {
+            const valid = updateClassRaw
+                .map((c) => (typeof c === "string" ? c.trim() : (c?.name || c?._id?.toString() || "").trim()))
+                .filter(Boolean);
+            cleanUpdateClass = valid.length > 0 ? valid[valid.length - 1] : "";
+        } else if (typeof updateClassRaw === "string" && updateClassRaw.trim()) {
+            cleanUpdateClass = updateClassRaw.trim();
+        } else if (typeof updateClassRaw === "object") {
+            cleanUpdateClass = (updateClassRaw.name || updateClassRaw._id?.toString() || "").trim();
+        }
+
+        if (cleanUpdateClass) {
+            if (mongoose.Types.ObjectId.isValid(cleanUpdateClass)) {
+                const ClassLevel = require("../../models/Academy/ClassLevel");
+                const cDoc = await ClassLevel.findById(cleanUpdateClass);
+                if (cDoc && cDoc.name) cleanUpdateClass = cDoc.name;
+            }
+            updateSet.currentClassLevel = cleanUpdateClass;
+            if (!updateOps.$addToSet) updateOps.$addToSet = {};
+            updateOps.$addToSet.classLevels = cleanUpdateClass;
+
+            try {
+                const ClassLevel = require("../../models/Academy/ClassLevel");
+                await ClassLevel.findOneAndUpdate(
+                    {
+                        $or: [
+                            { name: cleanUpdateClass },
+                            { name: { $regex: new RegExp(`^${safeEscapeRegex(cleanUpdateClass)}$`, "i") } }
+                        ]
+                    },
+                    { $addToSet: { students: studentFound._id } }
+                );
+            } catch (clErr) {
+                console.error("Error linking student to ClassLevel on update:", clErr);
+            }
+        }
     }
 
     const Subject = require("../../models/Academy/Subject");
@@ -1405,23 +1453,66 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
         throw new Error("Teacher not found");
     }
 
-    // Only return empty list if teacher has NEITHER classLevel NOR subject assigned
-    if (!teacher.classLevel && !teacher.subject) {
+    const mongoose = require("mongoose");
+    const Subject = require("../../models/Academy/Subject");
+    const ClassLevel = require("../../models/Academy/ClassLevel");
+    const ClassTeacherAssignment = require("../../models/Academy/ClassTeacherAssignment");
+    const Program = require("../../models/Academy/Program");
+
+    // Look up active Class Teacher Assignment for this teacher
+    let classTeacherAssignment = await ClassTeacherAssignment.findOne({
+        teacher: req.userAuth?._id,
+        isActive: true,
+    }).populate("classLevel program academicYear");
+
+    if (!classTeacherAssignment) {
+        classTeacherAssignment = await ClassTeacherAssignment.findOne({
+            teacher: req.userAuth?._id,
+        }).populate("classLevel program academicYear");
+    }
+
+    let assignedProgramId = null;
+    let assignedProgramName = null;
+    if (classTeacherAssignment?.program) {
+        assignedProgramId = classTeacherAssignment.program._id
+            ? classTeacherAssignment.program._id.toString()
+            : classTeacherAssignment.program.toString();
+        assignedProgramName = classTeacherAssignment.program.name || null;
+    } else if (teacher.program) {
+        const rawP = teacher.program.toString().trim();
+        if (mongoose.Types.ObjectId.isValid(rawP)) {
+            assignedProgramId = rawP;
+            const pDoc = await Program.findById(rawP);
+            assignedProgramName = pDoc?.name || null;
+        } else {
+            const pDoc = await Program.findOne({ name: { $regex: new RegExp(`^${safeEscapeRegex(rawP)}$`, "i") } });
+            if (pDoc) {
+                assignedProgramId = pDoc._id.toString();
+                assignedProgramName = pDoc.name;
+            } else {
+                assignedProgramName = rawP;
+            }
+        }
+    }
+
+    // Only return empty list if teacher has NEITHER classLevel NOR subject NOR classTeacherAssignment assigned
+    if (!teacher.classLevel && !teacher.subject && !assignedProgramId && !classTeacherAssignment) {
         return res.status(200).json({
             status: "Success",
             message: "No class level or subject assigned to your account yet.",
             data: [],
             teacherClassLevel: null,
-            teacherProgram: teacher.program || null,
+            teacherProgram: null,
             teacherSubject: null,
         });
     }
 
-    const mongoose = require("mongoose");
-    const Subject = require("../../models/Academy/Subject");
-    const ClassLevel = require("../../models/Academy/ClassLevel");
-
     let targetClassName = (teacher.classLevel || "").toString().trim();
+
+    // If teacher.classLevel is not set but assignment has a classLevel name, use that
+    if (!targetClassName && classTeacherAssignment?.classLevel?.name) {
+        targetClassName = classTeacherAssignment.classLevel.name.trim();
+    }
 
     // If teacher.classLevel is an ObjectId, resolve the ClassLevel document's name
     if (teacher.classLevel && mongoose.Types.ObjectId.isValid(teacher.classLevel)) {
@@ -1501,6 +1592,8 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
 
     const hasTeacherSubject = teacherSubjectNames.size > 0 || teacherSubjectIds.size > 0;
 
+    const hasAssignedProgram = Boolean(assignedProgramId || assignedProgramName);
+
     // Base database filter
     const orConditions = [];
 
@@ -1512,7 +1605,7 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
         }
     }
 
-    if (hasTeacherSubject) {
+    if (hasTeacherSubject && !hasAssignedProgram) {
         Array.from(teacherSubjectNames).forEach((name) => {
             const esc = safeEscapeRegex(name);
             orConditions.push({ subject: { $regex: new RegExp(`^${esc}$`, "i") } });
@@ -1526,7 +1619,15 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
 
     orConditions.push({ assignedTeacher: teacher._id });
 
-    const filter = orConditions.length > 0 ? { $or: orConditions } : {};
+    let filter = orConditions.length > 0 ? { $or: orConditions } : {};
+    if (hasAssignedProgram && assignedProgramId) {
+        filter = {
+            $and: [
+                filter,
+                { program: assignedProgramId }
+            ]
+        };
+    }
 
     const rawStudents = await Student.find(filter)
         .populate("program academicYear assignedTeacher")
@@ -1536,7 +1637,7 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
 
     // Strict filtering:
     // 1) Student MUST match teacher's class level (if teacher has classLevel).
-    // 2) If teacher has subject(s), student MUST be offering the teacher's subject alone!
+    // 2) If teacher has assigned program, use program alone! Otherwise verify teacher's subject.
     const strictStudents = rawStudents.filter((student) => {
         // 1. Class level check
         if (targetClassName) {
@@ -1553,8 +1654,8 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
             }
         }
 
-        // 2. Subject offering check: MUST offer the teacher's subject alone
-        if (hasTeacherSubject) {
+        // 2. Subject offering check: ONLY enforce if teacher is NOT assigned to a program
+        if (hasTeacherSubject && !hasAssignedProgram) {
             let offersSubject = false;
 
             // Check student's direct subject field
@@ -1587,6 +1688,21 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
             }
         }
 
+        // 3. Program check: If teacher has active Class Teacher Assignment with specific program, filter strictly
+        if (assignedProgramId || assignedProgramName) {
+            if (!student.program) return false;
+            const studentProgId = student.program._id ? student.program._id.toString() : student.program.toString();
+            const studentProgName = (student.program.name || "").toString().trim().toLowerCase();
+            let matchesProg = false;
+            if (assignedProgramId && studentProgId === assignedProgramId) {
+                matchesProg = true;
+            }
+            if (!matchesProg && assignedProgramName && studentProgName) {
+                matchesProg = studentProgName === assignedProgramName.trim().toLowerCase();
+            }
+            if (!matchesProg) return false;
+        }
+
         return true;
     });
 
@@ -1595,7 +1711,8 @@ exports.fetchTeacherClassStudentsCtrl = AsyncHandler(async (req, res) => {
         message: "Students strictly in your class offering your subject fetched successfully",
         data: strictStudents,
         teacherClassLevel: targetClassName || null,
-        teacherProgram: teacher.program || null,
+        teacherProgram: assignedProgramName || classTeacherAssignment?.program?.name || teacher.program || null,
+        teacherProgramId: assignedProgramId || null,
         teacherSubject: teacher.subject || null,
     });
 });
@@ -1669,55 +1786,76 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
         classLevelNamesSet.add(student.currentClassLevel.trim());
     }
 
-    // Helper: extract numeric tier for sorting (e.g. "Level 100" -> 100, "200L" -> 200, "Final" -> 999)
-    const getLevelSortOrder = (name) => {
-        const lower = (name || "").toLowerCase().trim();
-        if (lower.includes("final")) return 999;
-        const match = lower.match(/\d+/);
-        if (match) {
-            return parseInt(match[0], 10);
-        }
-        return 500;
-    };
+    // Helper: determine student educational track (JSS, SSS, or Tertiary)
+    const rawStudentClass = (student.currentClassLevel || "").toLowerCase();
+    const classHist = (Array.isArray(student.classLevels) ? student.classLevels : []).map(l =>
+        (typeof l === "object" ? l?.name || "" : l?.toString() || "").toLowerCase()
+    );
 
-    // Helper: generate nice short code (e.g. "100L", "200L", "300L", "400L / Final", "Final Year")
-    const getShortCode = (name) => {
-        const lower = (name || "").toLowerCase().trim();
-        const digits = lower.match(/\d+/)?.[0];
-        if (lower.includes("final")) {
-            return digits ? `${digits}L / Final` : "Final Year";
-        }
-        if (digits) {
-            return `${digits}L`;
-        }
-        return name;
-    };
+    const isJSS =
+        rawStudentClass.includes("jss") ||
+        rawStudentClass.includes("js ") ||
+        rawStudentClass.startsWith("js") ||
+        rawStudentClass.includes("junior") ||
+        classHist.some(l => l.includes("jss") || l.includes("junior"));
 
-    // Filter to canonical levels so we don't have messy duplicates like "400 levels", "400l", "Level 400"
-    const canonicalMap = new Map();
-    Array.from(classLevelNamesSet).forEach(name => {
-        const lower = name.toLowerCase().trim();
-        const digits = lower.match(/\d+/)?.[0];
-        const isFinal = lower.includes("final");
-        
-        // Ignore corrupted non-class entries
-        if (!digits && !isFinal && !lower.includes("level")) return;
+    const isSSS =
+        !isJSS && (
+            rawStudentClass.includes("sss") ||
+            rawStudentClass.includes("ss ") ||
+            rawStudentClass.startsWith("ss") ||
+            rawStudentClass.includes("senior") ||
+            classHist.some(l => l.includes("sss") || l.includes("senior"))
+        );
 
-        const key = isFinal ? "final" : (digits || lower);
-        
-        if (!canonicalMap.has(key)) {
-            canonicalMap.set(key, name);
-        } else {
-            const current = canonicalMap.get(key);
-            if (/^level\s*\d+/i.test(name) && !/^level\s*\d+/i.test(current)) {
-                canonicalMap.set(key, name);
+    const findMatchingDbClassName = (track, stepNum) => {
+        const found = dbClassLevels.find(c => {
+            const cLow = (c.name || "").toLowerCase();
+            if (track === "jss" && (cLow.includes("jss") || cLow.includes("junior") || cLow.includes("js"))) {
+                return cLow.match(/\d+/)?.[0] === String(stepNum);
             }
-        }
-    });
+            if (track === "sss" && (cLow.includes("sss") || cLow.includes("senior") || cLow.includes("ss"))) {
+                return cLow.match(/\d+/)?.[0] === String(stepNum);
+            }
+            if (track === "level") {
+                return cLow.match(/\d+/)?.[0] === String(stepNum * 100);
+            }
+            return false;
+        });
+        if (found) return found.name.trim();
+        if (track === "jss") return `JSS ${stepNum}`;
+        if (track === "sss") return `SSS ${stepNum}`;
+        return `Level ${stepNum * 100}`;
+    };
 
-    const sortedClasses = Array.from(canonicalMap.values()).sort((a, b) => {
-        return getLevelSortOrder(a) - getLevelSortOrder(b);
-    });
+    let targetTrackTiers = [];
+    if (isJSS) {
+        targetTrackTiers = [1, 2, 3].map(n => ({
+            tier: "jss",
+            step: n,
+            shortCode: `JSS ${n}`,
+            classLevel: findMatchingDbClassName("jss", n),
+            isFinal: n === 3,
+        }));
+    } else if (isSSS) {
+        targetTrackTiers = [1, 2, 3].map(n => ({
+            tier: "sss",
+            step: n,
+            shortCode: `SSS ${n}`,
+            classLevel: findMatchingDbClassName("sss", n),
+            isFinal: n === 3,
+        }));
+    } else {
+        targetTrackTiers = [1, 2, 3, 4].map(n => ({
+            tier: "level",
+            step: n,
+            shortCode: `Level ${n * 100}`,
+            classLevel: findMatchingDbClassName("level", n),
+            isFinal: n === 4,
+        }));
+    }
+
+    const sortedClasses = targetTrackTiers.map(t => t.classLevel);
 
     // 2. Collect student's enrolled subjects
     const enrolledSubjectsList = [];
@@ -1812,55 +1950,7 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
         }
     }
 
-    // Auto-sync & include all subjects under the student's assigned program
-    if (student.program) {
-        const progId = student.program._id || student.program;
-        const progSubjects = await Subject.find({
-            $or: [
-                { program: progId },
-                ...(Array.isArray(student.program.subjects) && student.program.subjects.length > 0 ? [{ _id: { $in: student.program.subjects } }] : [])
-            ]
-        }).populate("teacher academicTerms program");
-
-        const syncList = [];
-        for (const pSub of progSubjects) {
-            const subId = pSub._id ? pSub._id.toString() : "";
-            const subName = pSub.name || "Subject";
-            const cLevel = student.currentClassLevel || (pSub.classLevel && !pSub.classLevel.includes("100") ? pSub.classLevel : "") || "";
-            const dedupeKey = `${subId || subName}-${cLevel}`.toLowerCase();
-
-            if (!enrolledKeySet.has(dedupeKey)) {
-                enrolledKeySet.add(dedupeKey);
-                enrolledSubjectsList.push({
-                    _id: subId,
-                    subjectId: subId,
-                    name: subName,
-                    description: pSub.description || "Program Curriculum Subject",
-                    duration: pSub.duration || "3 months",
-                    teacher: pSub.teacher || student.assignedTeacher || null,
-                    academicTerms: pSub.academicTerms || null,
-                    program: pSub.program || student.program || null,
-                    classLevel: cLevel,
-                    dateEnrolled: student.dateAdmitted || new Date(),
-                });
-                syncList.push({
-                    subject: pSub._id,
-                    classLevel: cLevel,
-                    dateEnrolled: new Date(),
-                });
-            }
-        }
-
-        if (syncList.length > 0) {
-            try {
-                await Student.findByIdAndUpdate(student._id, {
-                    $addToSet: { enrolledSubjects: { $each: syncList } }
-                });
-            } catch (e) {
-                console.error("Auto-syncing program subjects error:", e);
-            }
-        }
-    }
+    // Note: Elective program subjects are enrolled only when explicitly selected by admin.
 
     // Auto-sync & include core subjects (Mathematics and English) generally
     const generalCoreSubjects = await resolveCoreSubjectsForStudent(student.program);
@@ -1940,20 +2030,45 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
         const tarTrim = targetClass.toString().trim().toLowerCase();
         if (subTrim === tarTrim) return true;
 
-        const subDigits = subTrim.match(/\d+/)?.[0];
-        const tarDigits = tarTrim.match(/\d+/)?.[0];
-        if (subDigits && tarDigits && subDigits === tarDigits) return true;
+        const getTierAndNum = (str) => {
+            const s = (str || "").toLowerCase();
+            let tier = "level";
+            if (s.includes("jss") || s.includes("junior") || s.includes("js")) tier = "jss";
+            else if (s.includes("sss") || s.includes("senior") || s.includes("ss")) tier = "sss";
+            else if (s.includes("pry") || s.includes("primary")) tier = "primary";
+            const num = s.match(/\d+/)?.[0] || "";
+            return { tier, num };
+        };
+
+        const subInfo = getTierAndNum(subTrim);
+        const tarInfo = getTierAndNum(tarTrim);
+
+        if (subInfo.tier === tarInfo.tier && subInfo.num && tarInfo.num && subInfo.num === tarInfo.num) {
+            return true;
+        }
 
         if (subTrim.includes("final") && tarTrim.includes("final")) return true;
         return false;
     };
 
-    // 3. Arrange subjects under each class level from 100L to Final
-    const currentDigits = (student.currentClassLevel || "").match(/\d+/)?.[0];
-    const arrangedByClass = sortedClasses.map((clsName) => {
-        const clsDigits = clsName.match(/\d+/)?.[0];
-        const isFinal = clsName.toLowerCase().includes("final") || clsDigits === "400";
-        const shortCode = getShortCode(clsName);
+    // 3. Arrange subjects under each class level (JSS 1-3, SSS 1-3, or Level 100-400)
+    let studentCurrentStep = 1;
+    if (rawStudentClass.includes("400") || (!isJSS && !isSSS && rawStudentClass.includes("4"))) {
+        studentCurrentStep = 4;
+    } else if (rawStudentClass.includes("300") || rawStudentClass.includes("3") || rawStudentClass.includes("three")) {
+        studentCurrentStep = 3;
+    } else if (rawStudentClass.includes("200") || rawStudentClass.includes("2") || rawStudentClass.includes("two")) {
+        studentCurrentStep = 2;
+    } else {
+        studentCurrentStep = 1;
+    }
+
+    const arrangedByClass = targetTrackTiers.map((tierItem) => {
+        const clsName = tierItem.classLevel;
+        const shortCode = tierItem.shortCode;
+        const isCurrent = studentCurrentStep === tierItem.step;
+        const isCompleted = studentCurrentStep > tierItem.step;
+        const isFinal = tierItem.isFinal;
 
         // Filter subjects for this class and deduplicate by subject name/id
         const seenInClass = new Set();
@@ -1965,18 +2080,6 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
             return true;
         });
 
-        // Is completed: if student's current level digits > this level digits
-        let isCompleted = false;
-        let isCurrent = false;
-        if (currentDigits && clsDigits) {
-            const currNum = parseInt(currentDigits, 10);
-            const thisNum = parseInt(clsDigits, 10);
-            if (currNum > thisNum) isCompleted = true;
-            if (currNum === thisNum) isCurrent = true;
-        } else if (student.currentClassLevel) {
-            isCurrent = student.currentClassLevel.toLowerCase() === clsName.toLowerCase();
-        }
-
         return {
             classLevel: clsName,
             shortCode,
@@ -1986,16 +2089,6 @@ exports.fetchStudentEnrolledSubjectsCtrl = AsyncHandler(async (req, res) => {
             count: subjectsForClass.length,
             subjects: subjectsForClass,
         };
-    });
-
-    // Filter to standard progression (100L to 400L / Final) or levels that have enrolled subjects
-    const relevantArranged = arrangedByClass.filter((group) => {
-        const digits = group.classLevel.match(/\d+/)?.[0];
-        const num = digits ? parseInt(digits, 10) : null;
-        if (num && num <= 400) return true;
-        if (group.isFinal) return true;
-        if (group.count > 0) return true;
-        return false;
     });
 
     res.status(200).json({
@@ -2244,30 +2337,72 @@ exports.teacherLookupStudentCtrl = AsyncHandler(async (req, res) => {
         });
     }
 
-    // Strictly verify teacher access
+    // Verify teacher access
     const { isStudentInTeacherClassAndOfferingSubject, getTeacherSubjectInfo, extractLevelNumber } = require("../academic/examResultsCtrl");
     const teacherSubjectInfo = await getTeacherSubjectInfo(teacher);
 
+    const ClassTeacherAssignment = require("../../models/Academy/ClassTeacherAssignment");
+    const activeAssignment = await ClassTeacherAssignment.findOne({ teacher: teacher._id, isActive: true }).populate("program classLevel");
+    const assignedProgId = activeAssignment?.program?._id
+        ? activeAssignment.program._id.toString()
+        : activeAssignment?.program ? activeAssignment.program.toString() : null;
+    const assignedProgName = activeAssignment?.program?.name || (teacher.program ? teacher.program.toString().trim() : null);
+
     let targetClassName = (teacher.classLevel || "").toString().trim();
+    if (!targetClassName && activeAssignment?.classLevel?.name) {
+        targetClassName = activeAssignment.classLevel.name.trim();
+    }
     if (teacher.classLevel && mongoose.Types.ObjectId.isValid(teacher.classLevel)) {
         const cDoc = await ClassLevel.findById(teacher.classLevel);
         if (cDoc && cDoc.name) targetClassName = cDoc.name.trim();
     }
     const teacherLevelNumber = extractLevelNumber(targetClassName);
 
-    const isAllowed = isStudentInTeacherClassAndOfferingSubject(
-        student,
-        teacher,
-        teacherSubjectInfo,
-        targetClassName,
-        teacherLevelNumber
-    );
+    // If teacher has assigned program, check class & program alone
+    if (assignedProgId || assignedProgName) {
+        if (targetClassName) {
+            const studentLevel = (student.currentClassLevel || "").trim();
+            const studentLevelNum = extractLevelNumber(studentLevel);
+            let classMatches = false;
+            if (teacherLevelNumber && studentLevelNum) {
+                classMatches = studentLevelNum === teacherLevelNumber;
+            } else {
+                classMatches = studentLevel.toLowerCase() === targetClassName.toLowerCase();
+            }
+            if (!classMatches) {
+                return res.status(403).json({
+                    status: "failed",
+                    message: `Student "${student.name}" (${student.StudentId}) is not in your assigned class (${targetClassName}).`
+                });
+            }
+        }
 
-    if (!isAllowed) {
-        return res.status(403).json({
-            status: "failed",
-            message: `Student "${student.name}" (${student.StudentId}) is not in your assigned class or does not offer your subject.`
-        });
+        const studentProgId = student.program?._id ? student.program._id.toString() : (student.program ? student.program.toString() : "");
+        const studentProgName = (student.program?.name || "").toString().trim().toLowerCase();
+        let matchesProg = false;
+        if (assignedProgId && studentProgId === assignedProgId) matchesProg = true;
+        if (!matchesProg && assignedProgName && studentProgName && studentProgName === assignedProgName.toLowerCase()) matchesProg = true;
+        if (!matchesProg) {
+            return res.status(403).json({
+                status: "failed",
+                message: `Student "${student.name}" belongs to program "${student.program?.name || "Other"}" and is not in your assigned program.`
+            });
+        }
+    } else {
+        const isAllowed = isStudentInTeacherClassAndOfferingSubject(
+            student,
+            teacher,
+            teacherSubjectInfo,
+            targetClassName,
+            teacherLevelNumber
+        );
+
+        if (!isAllowed) {
+            return res.status(403).json({
+                status: "failed",
+                message: `Student "${student.name}" (${student.StudentId}) is not in your assigned class or does not offer your subject.`
+            });
+        }
     }
 
     res.status(200).json({

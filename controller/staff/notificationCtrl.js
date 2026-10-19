@@ -1,22 +1,44 @@
 const AsyncHandler = require("express-async-handler");
 const Notification = require("../../models/Staff/Notification");
+const Parent = require("../../models/Staff/Parent");
 
 //@desc Get current user notifications
 //@route GET /api/v1/notifications
-//@access Private (Admin, Teacher, Student)
+//@access Private (Admin, Teacher, Student, Parent)
 exports.getUserNotificationsCtrl = AsyncHandler(async (req, res) => {
     const userId = req.userAuth?._id;
     const userRole = (req.userAuth?.role || "admin").toLowerCase();
 
-    // Condition: targeted to this specific user ID OR sent to all users with this role
-    const query = {
-        $or: [
-            { recipient: userId },
-            { recipientRole: userRole }
-        ]
-    };
+    let query;
+    if (userRole === "parent") {
+        const parentDoc = await Parent.findById(userId);
+        const childrenIds = (parentDoc?.children || []).map((id) => id.toString());
+
+        // Parent should see notifications directly targeted to them, role "parent",
+        // student broadcast notifications showing on student dashboard,
+        // OR notifications sent to any of their linked children
+        query = {
+            $or: [
+                { recipient: userId },
+                { recipientRole: "parent" },
+                { recipientRole: "student" },
+                ...(childrenIds.length > 0
+                    ? [{ recipient: { $in: childrenIds } }]
+                    : [])
+            ]
+        };
+    } else {
+        // Condition: targeted to this specific user ID OR sent to all users with this role
+        query = {
+            $or: [
+                { recipient: userId },
+                { recipientRole: userRole }
+            ]
+        };
+    }
 
     const notifications = await Notification.find(query)
+        .populate("recipient", "name StudentId studentId currentClassLevel email")
         .sort({ createdAt: -1 })
         .limit(50);
 
@@ -69,13 +91,31 @@ exports.markAllNotificationsAsReadCtrl = AsyncHandler(async (req, res) => {
     const userId = req.userAuth?._id;
     const userRole = (req.userAuth?.role || "admin").toLowerCase();
 
-    const query = {
-        $or: [
-            { recipient: userId },
-            { recipientRole: userRole }
-        ],
-        isRead: false,
-    };
+    let query;
+    if (userRole === "parent") {
+        const parentDoc = await Parent.findById(userId);
+        const childrenIds = (parentDoc?.children || []).map((id) => id.toString());
+
+        query = {
+            $or: [
+                { recipient: userId },
+                { recipientRole: "parent" },
+                { recipientRole: "student" },
+                ...(childrenIds.length > 0
+                    ? [{ recipient: { $in: childrenIds } }]
+                    : [])
+            ],
+            isRead: false,
+        };
+    } else {
+        query = {
+            $or: [
+                { recipient: userId },
+                { recipientRole: userRole }
+            ],
+            isRead: false,
+        };
+    }
 
     await Notification.updateMany(query, {
         isRead: true,

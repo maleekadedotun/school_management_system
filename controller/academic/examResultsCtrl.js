@@ -94,6 +94,11 @@ const isStudentInTeacherClassAndOfferingSubject = (student, teacher, teacherSubj
         if (!classMatches) return false;
     }
 
+    // If teacher has assigned program or class teacher assignment, filter by program alone without restricting by subject
+    if (teacher?.program || teacher?.classTeacherAssignment) {
+        return true;
+    }
+
     // 2. Subject offering check: Student must be offering teacher's assigned subject alone
     if (teacherSubjectInfo.hasTeacherSubject) {
         let offersSubject = false;
@@ -263,22 +268,41 @@ exports.recalculateSubjectPositions = recalculateSubjectPositions;
 
 //@desc checking single result
 //@route GET /api/v1/exam-results/:id/checking
-//@access private Student only
+//@access private Student or Parent
 
 exports.checkExamResultsCtrl = AsyncHandler(async (req, res) => {
-    // find the student
-    const studentFound = await Student.findById(req.userAuth?._id);
-    if (!studentFound) {
-        throw new Error("No student found");
+    let studentIds = [];
+    let studentFound = null;
+    const isParent = req.userAuth?.role === "parent";
+
+    if (isParent) {
+        const Parent = require("../../models/Staff/Parent");
+        const parent = await Parent.findById(req.userAuth?._id);
+        if (!parent || !parent.children || parent.children.length === 0) {
+            return res.status(404).json({
+                status: "failed",
+                message: "No linked children found for this parent.",
+            });
+        }
+        const studentDocs = await Student.find({ _id: { $in: parent.children } });
+        studentDocs.forEach((s) => {
+            if (s.StudentId) studentIds.push(s.StudentId);
+            studentIds.push(s._id.toString());
+        });
+        studentFound = studentDocs[0] || null;
+    } else {
+        studentFound = await Student.findById(req.userAuth?._id);
+        if (!studentFound) {
+            throw new Error("No student found");
+        }
+        if (studentFound.StudentId) studentIds.push(studentFound.StudentId);
+        studentIds.push(studentFound._id.toString());
     }
 
-    // find the result for this student
+    // find the result
     const examResult = await ExamResult.findOne({
         _id: req.params.id,
-        $or: [
-            { studentID: studentFound.StudentId },
-            { studentID: studentFound._id.toString() }
-        ]
+        studentID: { $in: studentIds },
     })
         .populate({
             path: "exam",
@@ -297,17 +321,17 @@ exports.checkExamResultsCtrl = AsyncHandler(async (req, res) => {
         });
     }
 
-    // check if exam is published - student CANNOT see unpublished results
-    if (examResult.isPublished === false) {
+    // check if exam is published - student/parent CANNOT see unpublished results
+    if (examResult.isPublished !== true) {
         if (!examResult.isTeacherPublished) {
             return res.status(403).json({
                 status: "failed",
-                message: "Exam result is currently awaiting verification and publication by your respective teacher. Please check back later."
+                message: "Exam result is currently awaiting verification and publication by the respective teacher. Please check back later."
             });
         }
         return res.status(403).json({
             status: "failed",
-            message: "Exam result has been verified by your teacher and is currently undergoing administrative review for final release."
+            message: "Exam result has been verified by teacher and is currently undergoing administrative review for final release."
         });
     }
 
@@ -319,26 +343,61 @@ exports.checkExamResultsCtrl = AsyncHandler(async (req, res) => {
     });
 });
 
-//@desc Student get all published exam results
+//@desc Student or Parent get all published exam results
 //@route GET /api/v1/exam-results
-//@access private Student only
+//@access private Student or Parent
 
 exports.fetchExamResultsCtrl = AsyncHandler(async (req, res) => {
-    const student = await Student.findById(req.userAuth?._id);
-    if (!student) {
-        return res.status(404).json({
-            status: "failed",
-            message: "Student account not found."
+    let studentIds = [];
+    const isParent = req.userAuth?.role === "parent";
+
+    if (isParent) {
+        const Parent = require("../../models/Staff/Parent");
+        const parent = await Parent.findById(req.userAuth?._id);
+        if (!parent || !parent.children || parent.children.length === 0) {
+            return res.status(200).json({
+                status: "Success",
+                message: "No linked children found for this parent.",
+                data: [],
+            });
+        }
+
+        const targetChildId = req.query.studentId;
+        let childrenToQuery = parent.children;
+        if (targetChildId && targetChildId !== "all") {
+            const match = parent.children.find((c) => c.toString() === targetChildId.toString());
+            if (!match) {
+                return res.status(403).json({
+                    status: "failed",
+                    message: "You are not authorized to view results for this student.",
+                });
+            }
+            childrenToQuery = [match];
+        }
+
+        const studentDocs = await Student.find({ _id: { $in: childrenToQuery } });
+        studentDocs.forEach((s) => {
+            if (s.StudentId) studentIds.push(s.StudentId);
+            if (s.studentId) studentIds.push(s.studentId);
+            studentIds.push(s._id.toString());
         });
+    } else {
+        const student = await Student.findById(req.userAuth?._id);
+        if (!student) {
+            return res.status(404).json({
+                status: "failed",
+                message: "Student account not found."
+            });
+        }
+        if (student.StudentId) studentIds.push(student.StudentId);
+        if (student.studentId) studentIds.push(student.studentId);
+        studentIds.push(student._id.toString());
     }
 
-    // Students CAN ONLY see published results
+    // MANDATORY WORKFLOW RULE: Students and Parents CANNOT see results until Admin approves and publishes them!
     const results = await ExamResult.find({
         isPublished: true,
-        $or: [
-            { studentID: student.StudentId },
-            { studentID: student._id.toString() }
-        ]
+        studentID: { $in: studentIds },
     })
         .populate({
             path: "exam",
@@ -452,7 +511,7 @@ exports.getAllExamResultsAdminCtrl = AsyncHandler(async (req, res) => {
         const rObj = r.toObject();
         const studentObj = studentMap[r.studentID] || studentMap[r.studentID?.toLowerCase()] || null;
         rObj.student = studentObj || { StudentId: r.studentID, name: "Student (" + r.studentID + ")" };
-        rObj.program = rObj.exam?.program || studentObj?.program || null;
+        rObj.program = studentObj?.program || rObj.exam?.program || null;
         return rObj;
     });
 
@@ -461,8 +520,17 @@ exports.getAllExamResultsAdminCtrl = AsyncHandler(async (req, res) => {
         populatedResults = populatedResults.filter(r => {
             const progId = r.program?._id?.toString() || r.program?.toString();
             const progName = r.program?.name?.toLowerCase();
+            const stuProgId = r.student?.program?._id?.toString() || r.student?.program?.toString();
+            const stuProgName = r.student?.program?.name?.toLowerCase();
+            const examProgId = r.exam?.program?._id?.toString() || r.exam?.program?.toString();
+            const examProgName = r.exam?.program?.name?.toLowerCase();
             const filterLower = program.toLowerCase();
-            return progId === program || (progName && progName.includes(filterLower));
+            return progId === program ||
+                (progName && progName.includes(filterLower)) ||
+                stuProgId === program ||
+                (stuProgName && stuProgName.includes(filterLower)) ||
+                examProgId === program ||
+                (examProgName && examProgName.includes(filterLower));
         });
     }
 
@@ -1264,7 +1332,22 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
     const teacherExams = await Exam.find({ $or: examOrConditions }).select("_id");
     const teacherExamIds = teacherExams.map(e => e._id);
 
+    const ClassTeacherAssignment = require("../../models/Academy/ClassTeacherAssignment");
+    const activeAssignment = await ClassTeacherAssignment.findOne({ teacher: teacher._id, isActive: true }).populate("classLevel program academicYear");
+    let assignedProgramId = null;
+    let assignedProgramName = null;
+    if (activeAssignment?.program) {
+        assignedProgramId = activeAssignment.program._id ? activeAssignment.program._id.toString() : activeAssignment.program.toString();
+        assignedProgramName = activeAssignment.program.name || null;
+    } else if (teacher.program) {
+        assignedProgramName = teacher.program.toString().trim();
+    }
+    const hasAssignedProgram = Boolean(assignedProgramId || assignedProgramName);
+
     let targetClassName = (teacher.classLevel || "").toString().trim();
+    if (!targetClassName && activeAssignment?.classLevel?.name) {
+        targetClassName = activeAssignment.classLevel.name.trim();
+    }
     if (teacher.classLevel && mongoose.Types.ObjectId.isValid(teacher.classLevel)) {
         const cDoc = await ClassLevel.findById(teacher.classLevel);
         if (cDoc && cDoc.name) {
@@ -1277,14 +1360,14 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
         ? new RegExp(`(^|\\b|\\D)${teacherLevelNumber}(\\D|\\b|$)`, "i")
         : targetClassName ? new RegExp(`^${safeEscapeRegex(targetClassName)}$`, "i") : null;
 
-    // Filter students strictly in teacher's class offering the teacher's subject alone
+    // Filter students in teacher's class
     const studentOr = [];
     if (targetClassName) {
         studentOr.push({ currentClassLevel: targetClassName });
         studentOr.push({ currentClassLevel: teacher.classLevel });
         if (levelRegex) studentOr.push({ currentClassLevel: { $regex: levelRegex } });
     }
-    if (teacherSubjectInfo.hasTeacherSubject) {
+    if (teacherSubjectInfo.hasTeacherSubject && !hasAssignedProgram) {
         Array.from(teacherSubjectInfo.teacherSubjectNames).forEach(name => {
             const esc = safeEscapeRegex(name);
             studentOr.push({ subject: { $regex: new RegExp(`^${esc}$`, "i") } });
@@ -1297,13 +1380,27 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
     }
     studentOr.push({ assignedTeacher: teacher._id });
 
-    const rawClassStudents = await Student.find(studentOr.length > 0 ? { $or: studentOr } : {})
+    let studentFilter = studentOr.length > 0 ? { $or: studentOr } : {};
+    if (hasAssignedProgram && assignedProgramId) {
+        studentFilter = { $and: [studentFilter, { program: assignedProgramId }] };
+    }
+
+    const rawClassStudents = await Student.find(studentFilter)
         .select("_id StudentId name email currentClassLevel program subject enrolledSubjects")
         .populate("program")
         .populate("enrolledSubjects.subject");
 
-    // In-memory strict check: Must be in teacher's class AND must offer teacher's subject alone
+    // In-memory check: if teacher has assigned program, filter by program alone
     const classStudents = rawClassStudents.filter((student) => {
+        if (hasAssignedProgram) {
+            if (!student.program) return false;
+            const sProgId = student.program._id ? student.program._id.toString() : student.program.toString();
+            const sProgName = (student.program.name || "").toString().trim().toLowerCase();
+            let matches = false;
+            if (assignedProgramId && sProgId === assignedProgramId) matches = true;
+            if (!matches && assignedProgramName && sProgName === assignedProgramName.toLowerCase()) matches = true;
+            return matches;
+        }
         return isStudentInTeacherClassAndOfferingSubject(
             student,
             teacher,
@@ -1328,12 +1425,12 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
         });
     }
 
-    // Results filter: Must be from students in teacher's class offering teacher's subject alone, AND for teacher's exams / subject
+    // Results filter: Must be from students in teacher's class
     const andConditions = [
         { studentID: { $in: validStudentIds } }
     ];
 
-    if (teacherSubjectInfo.hasTeacherSubject || teacherExamIds.length > 0) {
+    if (!hasAssignedProgram && (teacherSubjectInfo.hasTeacherSubject || teacherExamIds.length > 0)) {
         andConditions.push({ exam: { $in: teacherExamIds } });
     }
 
@@ -1393,7 +1490,7 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
         const rObj = r.toObject();
         const studentObj = studentMap[r.studentID] || studentMap[r.studentID?.toLowerCase()] || null;
         rObj.student = studentObj || { StudentId: r.studentID, name: "Student (" + r.studentID + ")" };
-        rObj.program = rObj.exam?.program || studentObj?.program || null;
+        rObj.program = studentObj?.program || rObj.exam?.program || null;
         if (!rObj.subject && rObj.exam?.subject) {
             rObj.subject = rObj.exam.subject;
         }
@@ -1402,6 +1499,47 @@ exports.fetchTeacherClassResultsCtrl = AsyncHandler(async (req, res) => {
         }
         return rObj;
     });
+
+    // Also include StudentSubjectResult entries for these class students
+    const StudentSubjectResult = require("../../models/Academy/StudentSubjectResult");
+    const ssResults = await StudentSubjectResult.find({
+        $or: [
+            { student: { $in: classStudents.map(s => s._id) } },
+            { studentID: { $in: validStudentIds } }
+        ]
+    }).populate("subject academicYear academicTerm classLevel");
+
+    for (const ssr of ssResults) {
+        const studentObj = studentMap[ssr.studentID] || studentMap[ssr.student?.toString()] || null;
+        populatedResults.push({
+            _id: ssr._id,
+            studentID: ssr.studentID,
+            student: studentObj || { StudentId: ssr.studentID, name: "Student (" + ssr.studentID + ")" },
+            program: studentObj?.program || null,
+            subject: ssr.subject,
+            subjectName: ssr.subjectName || ssr.subject?.name || "Subject",
+            exam: {
+                _id: ssr._id,
+                name: `${ssr.subjectName || ssr.subject?.name || "Subject"} Continuous Assessment & Exam`,
+                subject: ssr.subject,
+                totalMark: 100,
+                passMark: 40,
+                academicYear: ssr.academicYear,
+                academicTerm: ssr.academicTerm,
+                classLevel: ssr.classLevel,
+            },
+            testScore: ssr.testScore,
+            examScore: ssr.examScore,
+            score: ssr.totalScore,
+            grade: ssr.grade,
+            passMark: 40,
+            status: ssr.status === "failed" ? "Failed" : "Passed",
+            remarks: ssr.remark || (ssr.grade >= 80 ? "Excellent" : ssr.grade >= 70 ? "Very Good" : ssr.grade >= 60 ? "Good" : ssr.grade >= 40 ? "Fair" : "Poor"),
+            isTeacherPublished: true,
+            isPublished: false,
+            createdAt: ssr.createdAt || new Date(),
+        });
+    }
 
     // Consolidate test and exam results for each student in each subject so test & exam are displayed together in one line
     const consolidatedMap = new Map();

@@ -21,6 +21,8 @@ const {
     getStudentExistingSubjectResultsCtrl,
     getStudentFullReportCardCtrl,
     saveStudentMultiSubjectResultsCtrl,
+    resubmitClassReportCardsCtrl,
+    getReportCardReviewHistoryCtrl,
 } = require("../../controller/academic/reportCardCtrl");
 
 const isStudentLogin = require("../../middlewares/isStudentLogin");
@@ -29,6 +31,8 @@ const isAdmin = require("../../middlewares/isAdmin");
 const isAuthenticated = require("../../middlewares/isAuthenticated");
 const isTeacherLogin = require("../../middlewares/isTeacherLogin");
 const isTeacher = require("../../middlewares/isTeacher");
+const isAnyUserAuth = require("../../middlewares/isAnyUserAuth");
+const roleRestriction = require("../../middlewares/roleRestriction");
 const Admin = require("../../models/Staff/admin");
 
 const reportCardRouter = express.Router();
@@ -62,8 +66,13 @@ reportCardRouter.post("/calculate-class", isTeacherLogin, isTeacher, calculateCl
 // Get class report cards
 reportCardRouter.get("/class/:classLevelId", isTeacherLogin, isTeacher, getClassReportCardsCtrl);
 
-// Teacher submit class results to admin
+// Teacher submit class results to admin (Batch or single student)
 reportCardRouter.post("/class/submit", isTeacherLogin, isTeacher, submitClassReportCardsCtrl);
+reportCardRouter.post("/student/:studentId/submit", isTeacherLogin, isTeacher, submitClassReportCardsCtrl);
+
+// Teacher resubmit corrected results to admin (Batch or single student)
+reportCardRouter.post("/class/resubmit", isTeacherLogin, isTeacher, resubmitClassReportCardsCtrl);
+reportCardRouter.post("/student/:studentId/resubmit", isTeacherLogin, isTeacher, resubmitClassReportCardsCtrl);
 
 // Teacher update comment on report card
 reportCardRouter.patch("/:id/teacher-comment", isTeacherLogin, isTeacher, updateTeacherCommentCtrl);
@@ -73,27 +82,34 @@ reportCardRouter.patch("/teacher-comment", isTeacherLogin, isTeacher, updateTeac
 // Admin overview of all classes and terms
 reportCardRouter.get("/admin/overview", isAuthenticated(Admin), isAdmin, getAdminReportCardOverviewCtrl);
 
-// Admin approve class report cards
+// Admin approve class report cards (Batch or single student)
 reportCardRouter.patch("/class/approve", isAuthenticated(Admin), isAdmin, approveClassReportCardsCtrl);
+reportCardRouter.patch("/student/:studentId/approve", isAuthenticated(Admin), isAdmin, approveClassReportCardsCtrl);
 
-// Admin reject class report cards
+// Admin reject class report cards (Batch or single student)
 reportCardRouter.patch("/class/reject", isAuthenticated(Admin), isAdmin, rejectClassReportCardsCtrl);
+reportCardRouter.patch("/student/:studentId/reject", isAuthenticated(Admin), isAdmin, rejectClassReportCardsCtrl);
 
-// Admin publish class report cards (releases to students)
+// Admin publish class report cards (Batch or single student)
 reportCardRouter.patch("/class/publish", isAuthenticated(Admin), isAdmin, publishClassReportCardsCtrl);
+reportCardRouter.patch("/student/:studentId/publish", isAuthenticated(Admin), isAdmin, publishClassReportCardsCtrl);
 
 // Admin update principal comment and promotion status
 reportCardRouter.patch("/:id/admin-comment", isAuthenticated(Admin), isAdmin, updateAdminCommentCtrl);
 
-// --- STUDENT SPECIFIC ROUTES ---
-// Student view latest published report card (Section 21 & 26)
-reportCardRouter.get("/student/report-card", isStudentLogin, isStudent, getStudentLatestReportCardCtrl);
+// Audit and review history of a report card
+reportCardRouter.get("/student/:studentId/history", isTeacherLogin, isTeacher, getReportCardReviewHistoryCtrl);
+reportCardRouter.get("/:id/history", isTeacherLogin, isTeacher, getReportCardReviewHistoryCtrl);
 
-// Student get all published report cards
-reportCardRouter.get("/student/my-report-cards", isStudentLogin, isStudent, getStudentPublishedReportCardsCtrl);
+// --- STUDENT & PARENT ROUTES ---
+// Student or Parent view latest published report card (Section 21 & 26)
+reportCardRouter.get("/student/report-card", isAnyUserAuth, roleRestriction("student", "parent"), getStudentLatestReportCardCtrl);
 
-// Student view specific term report card
-reportCardRouter.get("/student/term/:termId", isStudentLogin, isStudent, getStudentTermReportCardCtrl);
+// Student or Parent get all published report cards
+reportCardRouter.get("/student/my-report-cards", isAnyUserAuth, roleRestriction("student", "parent"), getStudentPublishedReportCardsCtrl);
+
+// Student or Parent view specific term report card
+reportCardRouter.get("/student/term/:termId", isAnyUserAuth, roleRestriction("student", "parent"), getStudentTermReportCardCtrl);
 
 // Single report card detail by ID (Teacher or Admin)
 reportCardRouter.get("/:id", isTeacherLogin, isTeacher, getSingleReportCardByIdCtrl);

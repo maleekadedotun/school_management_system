@@ -14,7 +14,7 @@ const announcementSchema = new mongoose.Schema(
     },
     targetAudience: {
       type: String,
-      enum: ["teacher", "student", "general"],
+      enum: ["teacher", "student", "parent", "general"],
       required: true,
       default: "general",
     },

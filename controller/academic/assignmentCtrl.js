@@ -6,6 +6,8 @@ const Admin = require("../../models/Staff/admin");
 const Student = require("../../models/Academy/Student");
 const Subject = require("../../models/Academy/Subject");
 const ClassLevel = require("../../models/Academy/ClassLevel");
+const Parent = require("../../models/Staff/Parent");
+const Notification = require("../../models/Staff/Notification");
 
 const Program = require("../../models/Academy/program");
 
@@ -143,6 +145,10 @@ exports.createAssignmentCtrl = AsyncHandler(async (req, res) => {
   });
 
   await assignment.save();
+
+  if (targetStatus === "published") {
+    sendAssignmentNotifications(assignment, req.userAuth);
+  }
 
   const populatedAssignment = await Assignment.findById(assignment._id)
     .populate("subject", "name")
@@ -374,6 +380,94 @@ const isStudentEligibleForAssignment = (student, assignment) => {
   return true;
 };
 
+// Dispatch real-time notifications to eligible students and their parents when an assignment is published
+const sendAssignmentNotifications = async (assignment, senderUser) => {
+  try {
+    const fullAssignment = await Assignment.findById(assignment._id)
+      .populate("subject", "name")
+      .populate("classLevel", "name")
+      .populate("program", "name subjects")
+      .populate("createdBy", "name email teacherId role");
+
+    if (!fullAssignment) return;
+
+    const activeStudents = await Student.find({
+      isWithDrawn: { $ne: true },
+      isSuspended: { $ne: true },
+    })
+      .populate({
+        path: "program",
+        populate: { path: "subjects", select: "name" },
+      })
+      .populate("assignedTeacher")
+      .populate({
+        path: "enrolledSubjects.subject",
+        select: "name",
+      });
+
+    const eligibleStudents = activeStudents.filter((stu) =>
+      isStudentEligibleForAssignment(stu, fullAssignment)
+    );
+
+    if (eligibleStudents.length === 0) return;
+
+    const subjectName = fullAssignment.subject?.name || "Subject";
+    const dueDateFormatted = fullAssignment.dueDate
+      ? new Date(fullAssignment.dueDate).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })
+      : "No deadline specified";
+
+    const senderName = senderUser?.name || "Teacher";
+    const senderModel = senderUser?.role === "admin" ? "Admin" : "Teacher";
+
+    for (const student of eligibleStudents) {
+      // 1. Notification for Student
+      await Notification.create({
+        recipient: student._id,
+        recipientModel: "Student",
+        recipientRole: "student",
+        sender: senderUser._id,
+        senderModel,
+        senderName,
+        title: `New Assignment: ${fullAssignment.title}`,
+        message: `A new assignment "${fullAssignment.title}" for ${subjectName} has been assigned. Due: ${dueDateFormatted}. Max marks: ${fullAssignment.totalMarks}.`,
+        type: "assignment",
+        relatedId: fullAssignment._id,
+        link: "/student/assignments",
+      });
+
+      // 2. Notification for Student's Parent(s)
+      const parents = await Parent.find({
+        $or: [
+          ...(student.parent ? [{ _id: student.parent }] : []),
+          { children: student._id },
+        ],
+      });
+
+      for (const parent of parents) {
+        await Notification.create({
+          recipient: parent._id,
+          recipientModel: "Parent",
+          recipientRole: "parent",
+          sender: senderUser._id,
+          senderModel,
+          senderName,
+          title: `New Assignment for ${student.name}: ${fullAssignment.title}`,
+          message: `Your child ${student.name} received a new ${subjectName} assignment: "${fullAssignment.title}". Due date: ${dueDateFormatted}.`,
+          type: "assignment",
+          relatedId: fullAssignment._id,
+          link: "/parent/assignments",
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Error dispatching assignment notifications:", err);
+  }
+};
+
 
 
 //@desc Get all assignments (role-aware: students see strictly their class/program assignments, teachers see theirs/class, admin sees all)
@@ -505,6 +599,56 @@ exports.getAssignmentByIdCtrl = AsyncHandler(async (req, res) => {
   if (!assignment) {
     res.status(404);
     throw new Error("Assignment not found");
+  }
+
+  // If parent, check if any linked child is eligible, and return assignment in monitor-only mode
+  if (userRole === "parent") {
+    if (assignment.status === "draft") {
+      res.status(403);
+      throw new Error("This assignment is still a draft and not available.");
+    }
+
+    const parentDoc = await Parent.findById(userId).populate({
+      path: "children",
+      select: "name email StudentId currentClassLevel classLevels program assignedTeacher enrolledSubjects",
+      populate: [
+        { path: "program", select: "name subjects" },
+        { path: "assignedTeacher", select: "name email teacherId" },
+        { path: "enrolledSubjects.subject", select: "name" },
+      ],
+    });
+
+    const children = parentDoc?.children || [];
+    const eligibleChildren = children.filter((child) =>
+      isStudentEligibleForAssignment(child, assignment)
+    );
+
+    if (eligibleChildren.length === 0) {
+      res.status(403);
+      throw new Error("No assignment record for your child/children.");
+    }
+
+    const childIds = eligibleChildren.map((c) => c._id);
+    const submissions = await AssignmentSubmission.find({
+      assignment: id,
+      student: { $in: childIds },
+    }).populate("student", "name StudentId currentClassLevel");
+
+    const plain = assignment.toObject();
+    plain.isReadOnly = true;
+    plain.canSubmit = false;
+    plain.childSubmissions = submissions;
+    plain.eligibleChildren = eligibleChildren.map((c) => ({
+      _id: c._id,
+      name: c.name,
+      StudentId: c.StudentId,
+      currentClassLevel: c.currentClassLevel,
+    }));
+
+    return res.status(200).json({
+      status: "Success",
+      data: plain,
+    });
   }
 
   // If student, strictly verify Class Level, Program, Subject, and Teacher eligibility
@@ -657,6 +801,11 @@ exports.deleteAssignmentCtrl = AsyncHandler(async (req, res) => {
 //@route POST /api/v1/assignments/:id/submit
 //@access Student only
 exports.submitAssignmentCtrl = AsyncHandler(async (req, res) => {
+  if (req.userAuth?.role === "parent") {
+    res.status(403);
+    throw new Error("Parents are not allowed to submit or take assignments. This action is restricted to students.");
+  }
+
   const { id } = req.params;
   const userId = req.userAuth?._id;
 
@@ -827,6 +976,52 @@ exports.gradeSubmissionCtrl = AsyncHandler(async (req, res) => {
 
   await submission.save();
 
+  // Notify student & parent about graded assignment
+  try {
+    const studentDoc = await Student.findById(submission.student);
+    const assignTitle = submission.assignment?.title || "Assignment";
+    if (studentDoc) {
+      await Notification.create({
+        recipient: studentDoc._id,
+        recipientModel: "Student",
+        recipientRole: "student",
+        sender: userId,
+        senderModel: userRole === "admin" ? "Admin" : "Teacher",
+        senderName: req.userAuth?.name || "Teacher",
+        title: `Assignment Graded: ${assignTitle}`,
+        message: `Your assignment "${assignTitle}" has been graded. Score: ${submission.score}/${maxMarks}.`,
+        type: "assignment",
+        relatedId: submission.assignment?._id,
+        link: "/student/assignments",
+      });
+
+      const parents = await Parent.find({
+        $or: [
+          ...(studentDoc.parent ? [{ _id: studentDoc.parent }] : []),
+          { children: studentDoc._id },
+        ],
+      });
+
+      for (const p of parents) {
+        await Notification.create({
+          recipient: p._id,
+          recipientModel: "Parent",
+          recipientRole: "parent",
+          sender: userId,
+          senderModel: userRole === "admin" ? "Admin" : "Teacher",
+          senderName: req.userAuth?.name || "Teacher",
+          title: `${studentDoc.name}'s Assignment Graded: ${assignTitle}`,
+          message: `${studentDoc.name}'s submission for "${assignTitle}" was graded. Score: ${submission.score}/${maxMarks}.`,
+          type: "assignment",
+          relatedId: submission.assignment?._id,
+          link: "/parent/assignments",
+        });
+      }
+    }
+  } catch (notifErr) {
+    console.error("Error sending grade notifications:", notifErr);
+  }
+
   res.status(200).json({
     status: "Success",
     message: "Submission graded successfully",
@@ -908,6 +1103,7 @@ exports.publishAssignmentCtrl = AsyncHandler(async (req, res) => {
 
   assignment.status = "published";
   await assignment.save();
+  sendAssignmentNotifications(assignment, req.userAuth);
 
   const publishedAssignment = await Assignment.findById(id)
     .populate("subject", "name")
@@ -1025,4 +1221,216 @@ exports.getStudentAssignmentsCtrl = AsyncHandler(async (req, res) => {
     data: enrichedAssignments,
   });
 });
+
+//@desc Get assignments and submissions for parent's linked children (Monitor Only)
+//@route GET /api/v1/assignments/parent/children-assignments
+//@access Private (Parent, Admin)
+exports.getParentChildrenAssignmentsCtrl = AsyncHandler(async (req, res) => {
+  const userId = req.userAuth?._id;
+  const userRole = req.userAuth?.role;
+  const { studentId, status, subject } = req.query;
+
+  let parentDoc;
+  let childrenList = [];
+
+  if (userRole === "parent") {
+    parentDoc = await Parent.findById(userId).populate({
+      path: "children",
+      select: "name email StudentId currentClassLevel classLevels program assignedTeacher enrolledSubjects",
+      populate: [
+        { path: "program", select: "name subjects" },
+        { path: "assignedTeacher", select: "name email teacherId" },
+        { path: "enrolledSubjects.subject", select: "name" },
+      ],
+    });
+
+    if (!parentDoc) {
+      res.status(404);
+      throw new Error("Parent profile not found");
+    }
+
+    childrenList = parentDoc.children || [];
+  } else if (userRole === "admin") {
+    if (studentId && studentId !== "all") {
+      const student = await Student.findById(studentId)
+        .populate({
+          path: "program",
+          select: "name subjects",
+        })
+        .populate("assignedTeacher")
+        .populate("enrolledSubjects.subject");
+      if (student) childrenList = [student];
+    } else {
+      childrenList = await Student.find({ isWithDrawn: { $ne: true } })
+        .populate({
+          path: "program",
+          select: "name subjects",
+        })
+        .populate("assignedTeacher")
+        .populate("enrolledSubjects.subject")
+        .limit(20);
+    }
+  }
+
+  if (childrenList.length === 0) {
+    return res.status(200).json({
+      status: "Success",
+      message: "No children linked to this parent account yet",
+      data: {
+        children: [],
+        activeChild: null,
+        assignments: [],
+        stats: {
+          total: 0,
+          pending: 0,
+          submitted: 0,
+          graded: 0,
+          late: 0,
+          averageScore: 0,
+        },
+      },
+    });
+  }
+
+  // Filter target children if a specific student is selected
+  let targetChildren = childrenList;
+  let activeChild = null;
+  if (studentId && studentId !== "all") {
+    const foundChild = childrenList.find(
+      (c) => c._id.toString() === studentId.toString()
+    );
+    if (foundChild) {
+      targetChildren = [foundChild];
+      activeChild = foundChild;
+    }
+  }
+
+  // Fetch all published/active assignments
+  let assignFilter = { status: { $in: ["published", "active"] } };
+  if (subject && subject !== "all") {
+    assignFilter.subject = subject;
+  }
+
+  const allPublishedAssignments = await Assignment.find(assignFilter)
+    .populate("subject", "name")
+    .populate("classLevel", "name")
+    .populate("program", "name")
+    .populate("createdBy", "name email teacherId role")
+    .sort({ dueDate: 1, createdAt: -1 });
+
+  let enrichedList = [];
+  const now = new Date();
+
+  for (const child of targetChildren) {
+    const eligible = allPublishedAssignments.filter((assign) =>
+      isStudentEligibleForAssignment(child, assign)
+    );
+
+    const assignIds = eligible.map((a) => a._id);
+
+    const childSubmissions = await AssignmentSubmission.find({
+      assignment: { $in: assignIds },
+      student: child._id,
+    });
+
+    const subMap = new Map();
+    childSubmissions.forEach((sub) => {
+      subMap.set(sub.assignment.toString(), sub);
+    });
+
+    for (const item of eligible) {
+      const plain = item.toObject();
+      const mySub = subMap.get(item._id.toString());
+      const hasSubmitted = !!mySub;
+      let submissionStatus = "pending";
+
+      if (mySub) {
+        submissionStatus = mySub.status; // "submitted" | "graded" | "late"
+      } else if (item.dueDate && new Date(item.dueDate) < now) {
+        submissionStatus = "overdue";
+      }
+
+      plain.child = {
+        _id: child._id,
+        name: child.name,
+        StudentId: child.StudentId,
+        currentClassLevel: child.currentClassLevel,
+      };
+      plain.submission = mySub || null;
+      plain.hasSubmitted = hasSubmitted;
+      plain.submissionStatus = submissionStatus;
+      plain.isReadOnly = true;
+      plain.canSubmit = false; // Strictly monitor only
+
+      // Filter by tab status if specified
+      if (status && status !== "all") {
+        if (status === "pending" && submissionStatus !== "pending" && submissionStatus !== "overdue") {
+          continue;
+        } else if (status === "submitted" && submissionStatus !== "submitted") {
+          continue;
+        } else if (status === "graded" && submissionStatus !== "graded") {
+          continue;
+        } else if (status === "overdue" && submissionStatus !== "overdue") {
+          continue;
+        }
+      }
+
+      enrichedList.push(plain);
+    }
+  }
+
+  // Calculate statistics across all eligible assignments for the target children
+  const total = enrichedList.length;
+  const pending = enrichedList.filter(
+    (a) => a.submissionStatus === "pending" || a.submissionStatus === "overdue"
+  ).length;
+  const submitted = enrichedList.filter((a) => a.submissionStatus === "submitted").length;
+  const graded = enrichedList.filter((a) => a.submissionStatus === "graded").length;
+  const late = enrichedList.filter((a) => a.submissionStatus === "late").length;
+  const gradedItems = enrichedList.filter(
+    (a) => a.submission?.score !== undefined && a.submission?.score !== null
+  );
+  const averageScore =
+    gradedItems.length > 0
+      ? Math.round(
+          gradedItems.reduce(
+            (acc, curr) => acc + (curr.submission.score / (curr.totalMarks || 100)) * 100,
+            0
+          ) / gradedItems.length
+        )
+      : 0;
+
+  res.status(200).json({
+    status: "Success",
+    results: enrichedList.length,
+    data: {
+      children: childrenList.map((c) => ({
+        _id: c._id,
+        name: c.name,
+        StudentId: c.StudentId,
+        currentClassLevel: c.currentClassLevel,
+      })),
+      activeChild: activeChild
+        ? {
+            _id: activeChild._id,
+            name: activeChild.name,
+            StudentId: activeChild.StudentId,
+            currentClassLevel: activeChild.currentClassLevel,
+          }
+        : null,
+      assignments: enrichedList,
+      stats: {
+        total,
+        pending,
+        submitted,
+        graded,
+        late,
+        averageScore,
+      },
+    },
+  });
+});
+
+exports.isStudentEligibleForAssignment = isStudentEligibleForAssignment;
+
 

@@ -4,6 +4,7 @@ const {
   parentRegisterCtrl,
   parentLoginCtrl,
   getParentProfileCtrl,
+  getParentDashboardCtrl,
   linkStudentToParentCtrl,
   getAllParentsCtrl,
 } = require("../../controller/staff/parentCtrl");
@@ -15,6 +16,13 @@ parentRouter.post("/register", parentRegisterCtrl);
 parentRouter.post("/login", parentLoginCtrl);
 
 // Authenticated Parent & Admin routes
+parentRouter.get(
+  "/dashboard",
+  isAnyUserAuth,
+  roleRestriction("parent", "admin"),
+  getParentDashboardCtrl
+);
+
 parentRouter.get(
   "/profile",
   isAnyUserAuth,

@@ -17,6 +17,9 @@ const isTeacherLogin = require("../../middlewares/isTeacherLogin");
 const isTeacher = require("../../middlewares/isTeacher");
 const Admin = require("../../models/Staff/admin");
 
+const isAnyUserAuth = require("../../middlewares/isAnyUserAuth");
+const roleRestriction = require("../../middlewares/roleRestriction");
+
 const checkExamResultsRouter = express.Router();
 
 checkExamResultsRouter.get("/admin", isAuthenticated(Admin), isAdmin, getAllExamResultsAdminCtrl);
@@ -28,8 +31,8 @@ checkExamResultsRouter.post("/admin/enter-result", isAuthenticated(Admin), isAdm
 checkExamResultsRouter.put("/:id/teacher-toggle-publish", isTeacherLogin, isTeacher, teacherTogglePublishResultCtrl);
 checkExamResultsRouter.post("/:id/teacher-toggle-publish", isTeacherLogin, isTeacher, teacherTogglePublishResultCtrl);
 checkExamResultsRouter.put("/teacher/publish/:id", isTeacherLogin, isTeacher, teacherTogglePublishResultCtrl);
-checkExamResultsRouter.get("/", isStudentLogin, isStudent, fetchExamResultsCtrl);
-checkExamResultsRouter.get("/:id/checking", isStudentLogin, isStudent, checkExamResultsCtrl);
+checkExamResultsRouter.get("/", isAnyUserAuth, roleRestriction("student", "parent"), fetchExamResultsCtrl);
+checkExamResultsRouter.get("/:id/checking", isAnyUserAuth, roleRestriction("student", "parent"), checkExamResultsCtrl);
 checkExamResultsRouter.put("/:id/admin-toggle-publish", isAuthenticated(Admin), isAdmin, adminToggleExamResult);
 checkExamResultsRouter.post("/:id/admin-toggle-publish", isAuthenticated(Admin), isAdmin, adminToggleExamResult);
 checkExamResultsRouter.put("/:id/publish", isAuthenticated(Admin), isAdmin, adminToggleExamResult);

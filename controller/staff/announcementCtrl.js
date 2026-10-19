@@ -4,6 +4,7 @@ const Announcement = require("../../models/Staff/Announcement");
 const Admin = require("../../models/Staff/admin");
 const Teacher = require("../../models/Staff/Teacher");
 const Student = require("../../models/Academy/Student");
+const Parent = require("../../models/Staff/Parent");
 const verifyToken = require("../../utils/verifyToken");
 
 // Priority sort weight
@@ -30,11 +31,11 @@ exports.createAnnouncementCtrl = AsyncHandler(async (req, res) => {
     throw new Error("Announcement message content is required");
   }
 
-  const validAudiences = ["teacher", "student", "general"];
+  const validAudiences = ["teacher", "student", "parent", "general"];
   const audience = (targetAudience || "general").toLowerCase().trim();
   if (!validAudiences.includes(audience)) {
     res.status(400);
-    throw new Error("Target audience must be 'teacher', 'student', or 'general'");
+    throw new Error("Target audience must be 'teacher', 'student', 'parent', or 'general'");
   }
 
   const adminUser = await Admin.findById(req.userAuth?._id);
@@ -112,7 +113,7 @@ exports.getAllAnnouncementsAdminCtrl = AsyncHandler(async (req, res) => {
   });
 });
 
-//@desc Get active announcements for Marquee ticker (Teacher, Student, Admin)
+//@desc Get active announcements for Marquee ticker (Teacher, Student, Parent, Admin)
 //@route GET /api/v1/announcements/active
 //@access Public / Private (Adaptive by user role)
 exports.getActiveAnnouncementsCtrl = AsyncHandler(async (req, res) => {
@@ -133,6 +134,10 @@ exports.getActiveAnnouncementsCtrl = AsyncHandler(async (req, res) => {
             else {
               const studentCheck = await Student.findById(decoded.id).select("role");
               if (studentCheck) userRole = studentCheck.role;
+              else {
+                const parentCheck = await Parent.findById(decoded.id).select("role");
+                if (parentCheck) userRole = parentCheck.role || "parent";
+              }
             }
           }
         }
@@ -153,13 +158,13 @@ exports.getActiveAnnouncementsCtrl = AsyncHandler(async (req, res) => {
 
   // Filter based on target role:
   // If teacher -> teacher announcements + general announcements
-  // If student -> student announcements + general announcements
+  // If student or parent -> student announcements + parent announcements + general announcements
   // If admin -> all active announcements
   // Default / anonymous -> general announcements
   if (userRole === "teacher") {
     filter.targetAudience = { $in: ["teacher", "general"] };
-  } else if (userRole === "student") {
-    filter.targetAudience = { $in: ["student", "general"] };
+  } else if (userRole === "student" || userRole === "parent") {
+    filter.targetAudience = { $in: ["student", "parent", "general"] };
   } else if (userRole === "admin") {
     // Admin sees all
     if (req.query.targetAudience && req.query.targetAudience !== "all") {

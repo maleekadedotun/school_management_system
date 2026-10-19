@@ -10,12 +10,12 @@ const notificationSchema = new mongoose.Schema(
         recipientModel: {
             type: String,
             required: true,
-            enum: ["Admin", "Teacher", "Student"],
+            enum: ["Admin", "Teacher", "Student", "Parent"],
             default: "Admin",
         },
         recipientRole: {
             type: String,
-            enum: ["admin", "teacher", "student"],
+            enum: ["admin", "teacher", "student", "parent"],
             required: true,
         },
         sender: {
@@ -24,7 +24,7 @@ const notificationSchema = new mongoose.Schema(
         },
         senderModel: {
             type: String,
-            enum: ["Admin", "Teacher", "Student"],
+            enum: ["Admin", "Teacher", "Student", "Parent"],
         },
         senderName: {
             type: String,
@@ -44,6 +44,7 @@ const notificationSchema = new mongoose.Schema(
                 "weekly_report_submitted",
                 "weekly_report_read",
                 "exam_result",
+                "assignment",
                 "general",
             ],
             default: "general",

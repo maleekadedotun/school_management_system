@@ -2,6 +2,7 @@ const AsyncHandler = require("express-async-handler");
 const Attendance = require("../../models/Academy/Attendance");
 const Student = require("../../models/Academy/Student");
 const Teacher = require("../../models/Staff/Teacher");
+const Parent = require("../../models/Staff/Parent");
 
 // Helper to normalize date to YYYY-MM-DD format
 const formatDateString = (dateInput) => {
@@ -343,5 +344,241 @@ exports.deleteAttendanceCtrl = AsyncHandler(async (req, res) => {
     status: "Success",
     message: "Attendance register deleted successfully",
     data: sessionDoc,
+  });
+});
+
+//@desc Get student's personal attendance summary (Read-Only)
+//@route GET /api/v1/attendance/student/my-attendance
+//@access Private (Student, Admin)
+exports.getStudentAttendanceSummaryCtrl = AsyncHandler(async (req, res) => {
+  const user = req.userAuth;
+  const studentId = user.role === "student" ? user._id : (req.query.studentId || user._id);
+
+  const studentDoc = await Student.findById(studentId).select("name email StudentId currentClassLevel program");
+  if (!studentDoc) {
+    return res.status(404).json({
+      status: "failed",
+      message: "Student record not found",
+    });
+  }
+
+  // Find all attendance sessions containing this student
+  const registers = await Attendance.find({ "records.student": studentId })
+    .populate("teacher", "name email teacherId")
+    .sort({ dateString: -1, createdAt: -1 });
+
+  let presentDays = [];
+  let absentDays = [];
+  let lateDays = [];
+  let excusedDays = [];
+  let allRecords = [];
+
+  registers.forEach((reg) => {
+    const studentRec = reg.records.find(
+      (r) => r.student && r.student.toString() === studentId.toString()
+    );
+    if (studentRec) {
+      const item = {
+        _id: reg._id,
+        date: reg.date,
+        dateString: reg.dateString,
+        classLevel: reg.classLevel,
+        subject: reg.subject || "General / Morning Roll Call",
+        academicTerm: reg.academicTerm,
+        academicYear: reg.academicYear,
+        teacher: reg.teacher ? { _id: reg.teacher._id, name: reg.teacher.name, email: reg.teacher.email } : null,
+        status: studentRec.status,
+        remarks: studentRec.remarks || "",
+      };
+
+      allRecords.push(item);
+      if (studentRec.status === "Present") presentDays.push(item);
+      else if (studentRec.status === "Absent") absentDays.push(item);
+      else if (studentRec.status === "Late") lateDays.push(item);
+      else if (studentRec.status === "Excused") excusedDays.push(item);
+    }
+  });
+
+  const totalSessions = allRecords.length;
+  const presentCount = presentDays.length;
+  const absentCount = absentDays.length;
+  const lateCount = lateDays.length;
+  const excusedCount = excusedDays.length;
+  const attendanceRate =
+    totalSessions > 0
+      ? Math.round(((presentCount + lateCount) / totalSessions) * 100)
+      : 100;
+
+  res.status(200).json({
+    status: "Success",
+    message: "Student attendance summary fetched successfully",
+    data: {
+      student: studentDoc,
+      summary: {
+        totalSessions,
+        presentCount,
+        absentCount,
+        lateCount,
+        excusedCount,
+        attendanceRate,
+      },
+      presentDays,
+      absentDays,
+      lateDays,
+      excusedDays,
+      allRecords,
+    },
+  });
+});
+
+//@desc Get parent child's attendance summary (Read-Only)
+//@route GET /api/v1/attendance/parent/child-attendance
+//@access Private (Parent, Admin)
+exports.getParentChildAttendanceSummaryCtrl = AsyncHandler(async (req, res) => {
+  const user = req.userAuth;
+  let childrenList = [];
+  let targetChildId = req.query.studentId;
+
+  if (user.role === "parent") {
+    const parentDoc = await Parent.findById(user._id).populate(
+      "children",
+      "name email StudentId currentClassLevel program"
+    );
+
+    if (!parentDoc) {
+      return res.status(404).json({
+        status: "failed",
+        message: "Parent profile not found",
+      });
+    }
+
+    childrenList = parentDoc.children || [];
+    if (childrenList.length === 0) {
+      return res.status(200).json({
+        status: "Success",
+        message: "No children currently linked to this parent account",
+        data: {
+          children: [],
+          activeChild: null,
+          summary: {
+            totalSessions: 0,
+            presentCount: 0,
+            absentCount: 0,
+            lateCount: 0,
+            excusedCount: 0,
+            attendanceRate: 100,
+          },
+          presentDays: [],
+          absentDays: [],
+          lateDays: [],
+          excusedDays: [],
+          allRecords: [],
+        },
+      });
+    }
+
+    if (!targetChildId) {
+      targetChildId = childrenList[0]._id.toString();
+    } else {
+      const isLinked = childrenList.some(
+        (c) => c._id.toString() === targetChildId.toString()
+      );
+      if (!isLinked) {
+        return res.status(403).json({
+          status: "failed",
+          message: "Access denied: Specified student is not linked to your parent account",
+        });
+      }
+    }
+  } else if (user.role === "admin") {
+    if (!targetChildId) {
+      const anyStudent = await Student.findOne().select("name email StudentId currentClassLevel program");
+      if (!anyStudent) {
+        return res.status(404).json({
+          status: "failed",
+          message: "No students exist in system",
+        });
+      }
+      targetChildId = anyStudent._id.toString();
+    }
+    const student = await Student.findById(targetChildId).select("name email StudentId currentClassLevel program");
+    childrenList = student ? [student] : [];
+  } else {
+    return res.status(403).json({
+      status: "failed",
+      message: "Access denied: Unauthorized role",
+    });
+  }
+
+  const activeChild = childrenList.find(
+    (c) => c._id.toString() === targetChildId.toString()
+  ) || (await Student.findById(targetChildId).select("name email StudentId currentClassLevel program"));
+
+  const registers = await Attendance.find({ "records.student": targetChildId })
+    .populate("teacher", "name email teacherId")
+    .sort({ dateString: -1, createdAt: -1 });
+
+  let presentDays = [];
+  let absentDays = [];
+  let lateDays = [];
+  let excusedDays = [];
+  let allRecords = [];
+
+  registers.forEach((reg) => {
+    const studentRec = reg.records.find(
+      (r) => r.student && r.student.toString() === targetChildId.toString()
+    );
+    if (studentRec) {
+      const item = {
+        _id: reg._id,
+        date: reg.date,
+        dateString: reg.dateString,
+        classLevel: reg.classLevel,
+        subject: reg.subject || "General / Morning Roll Call",
+        academicTerm: reg.academicTerm,
+        academicYear: reg.academicYear,
+        teacher: reg.teacher ? { _id: reg.teacher._id, name: reg.teacher.name, email: reg.teacher.email } : null,
+        status: studentRec.status,
+        remarks: studentRec.remarks || "",
+      };
+
+      allRecords.push(item);
+      if (studentRec.status === "Present") presentDays.push(item);
+      else if (studentRec.status === "Absent") absentDays.push(item);
+      else if (studentRec.status === "Late") lateDays.push(item);
+      else if (studentRec.status === "Excused") excusedDays.push(item);
+    }
+  });
+
+  const totalSessions = allRecords.length;
+  const presentCount = presentDays.length;
+  const absentCount = absentDays.length;
+  const lateCount = lateDays.length;
+  const excusedCount = excusedDays.length;
+  const attendanceRate =
+    totalSessions > 0
+      ? Math.round(((presentCount + lateCount) / totalSessions) * 100)
+      : 100;
+
+  res.status(200).json({
+    status: "Success",
+    message: "Child attendance summary fetched successfully",
+    data: {
+      children: childrenList,
+      activeChild,
+      summary: {
+        totalSessions,
+        presentCount,
+        absentCount,
+        lateCount,
+        excusedCount,
+        attendanceRate,
+      },
+      presentDays,
+      absentDays,
+      lateDays,
+      excusedDays,
+      allRecords,
+    },
   });
 });

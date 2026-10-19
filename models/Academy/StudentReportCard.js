@@ -69,6 +69,46 @@ const subjectResultSchema = new mongoose.Schema(
     { _id: true }
 );
 
+const reviewHistorySchema = new mongoose.Schema(
+    {
+        action: {
+            type: String,
+            required: true,
+            enum: ["submitted", "approved", "rejected", "published", "unpublished", "resubmitted"],
+        },
+        performedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            refPath: "reviewHistory.performerModel",
+        },
+        performerModel: {
+            type: String,
+            enum: ["Admin", "Teacher"],
+            default: "Admin",
+        },
+        performerName: {
+            type: String,
+            default: "",
+        },
+        timestamp: {
+            type: Date,
+            default: Date.now,
+        },
+        reason: {
+            type: String,
+            default: "",
+        },
+        previousStatus: {
+            type: String,
+            default: "",
+        },
+        newStatus: {
+            type: String,
+            default: "",
+        },
+    },
+    { _id: true }
+);
+
 const studentReportCardSchema = new mongoose.Schema(
     {
         student: {
@@ -98,6 +138,12 @@ const studentReportCardSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "ClassLevel",
             required: true,
+        },
+
+        program: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Program",
+            default: null,
         },
 
         // Detailed subject results collected from existing ExamResult records
@@ -176,9 +222,12 @@ const studentReportCardSchema = new mongoose.Schema(
                 "saved",
                 "calculated",
                 "submitted",
+                "submitted_to_admin",
                 "approved",
                 "published",
                 "rejected",
+                "returned_for_correction",
+                "resubmitted",
             ],
             default: "calculated",
         },
@@ -226,6 +275,30 @@ const studentReportCardSchema = new mongoose.Schema(
             default: "",
         },
 
+        rejectedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Admin",
+            default: null,
+        },
+
+        rejectedAt: {
+            type: Date,
+            default: null,
+        },
+
+        resubmittedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Teacher",
+            default: null,
+        },
+
+        resubmittedAt: {
+            type: Date,
+            default: null,
+        },
+
+        reviewHistory: [reviewHistorySchema],
+
         // Future-proof extensible fields
         attendance: {
             daysOpened: { type: Number, default: 0 },
@@ -248,6 +321,22 @@ const studentReportCardSchema = new mongoose.Schema(
         timestamps: true,
     }
 );
+
+// Pre-save hook: Ensure program is populated from student if missing
+studentReportCardSchema.pre("save", async function (next) {
+    if (!this.program && this.student) {
+        try {
+            const Student = mongoose.model("Student");
+            const stu = await Student.findById(this.student).select("program");
+            if (stu?.program) {
+                this.program = stu.program;
+            }
+        } catch {
+            // Ignore if student model not loaded yet
+        }
+    }
+    next();
+});
 
 // Compound index to guarantee only one official report card per student per academicYear + academicTerm + classLevel
 studentReportCardSchema.index(

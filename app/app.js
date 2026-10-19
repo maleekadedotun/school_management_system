@@ -24,6 +24,7 @@ const announcementRouter = require("../routes/staff/announcementRouter");
 const reportCardRouter = require("../routes/academic/reportCardRouter");
 const financeRouter = require("../routes/academic/financeRouter");
 const parentRouter = require("../routes/staff/parentRouter");
+const classTeacherAssignmentRouter = require("../routes/academic/classTeacherAssignmentRouter");
 // School Finance & Bursary Routes mounted
 const Student = require("../models/Academy/Student");
 // const academicTermRouter = require("../routes/academic/academicTermRouter");
@@ -98,6 +99,7 @@ app.use("/api/v1/announcements", announcementRouter);
 app.use("/api/v1/report-cards", reportCardRouter);
 app.use("/api/v1/finance", financeRouter);
 app.use("/api/v1/parents", parentRouter);
+app.use("/api/v1/class-teachers", classTeacherAssignmentRouter);
 
 
 // ✅ root route

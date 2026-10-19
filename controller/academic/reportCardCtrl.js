@@ -3,6 +3,7 @@ const AsyncHandler = require("express-async-handler");
 const StudentReportCard = require("../../models/Academy/StudentReportCard");
 const StudentSubjectResult = require("../../models/Academy/StudentSubjectResult");
 const ExamResult = require("../../models/Academy/ExamResults");
+const Exam = require("../../models/Academy/Exam");
 const Student = require("../../models/Academy/Student");
 const ClassLevel = require("../../models/Academy/ClassLevel");
 const AcademicYear = require("../../models/Academy/AcademicYear");
@@ -10,12 +11,117 @@ const AcademicTerm = require("../../models/Academy/AcademicTerm");
 const Subject = require("../../models/Academy/Subject");
 const Teacher = require("../../models/Staff/Teacher");
 const Admin = require("../../models/Staff/admin");
+const ClassTeacherAssignment = require("../../models/Academy/ClassTeacherAssignment");
+const Program = require("../../models/Academy/program");
+
+// Helper: Resolve target program for class teacher or explicit request
+const resolveTargetProgram = async (userAuth, classLevelId, academicYearId, explicitProgramId) => {
+    // 1. Explicit program provided in query or body
+    if (explicitProgramId && explicitProgramId !== "all") {
+        if (mongoose.Types.ObjectId.isValid(explicitProgramId)) {
+            const prog = await Program.findById(explicitProgramId);
+            if (prog) return { id: prog._id.toString(), doc: prog };
+        }
+        const progByName = await Program.findOne({
+            $or: [
+                { name: { $regex: new RegExp(`^${explicitProgramId.toString().trim()}$`, "i") } },
+                { code: { $regex: new RegExp(`^${explicitProgramId.toString().trim()}$`, "i") } },
+            ],
+        });
+        if (progByName) return { id: progByName._id.toString(), doc: progByName };
+    }
+
+    // 2. If requesting user is a Teacher, automatically retrieve their active Class Teacher Assignment
+    if (userAuth?.role === "teacher" && userAuth?._id) {
+        let query = {
+            teacher: userAuth._id,
+            isActive: true,
+        };
+        if (classLevelId) {
+            query.$or = [
+                ...(mongoose.Types.ObjectId.isValid(classLevelId) ? [{ classLevel: classLevelId }] : []),
+                { classLevel: classLevelId },
+            ];
+        }
+        if (academicYearId && mongoose.Types.ObjectId.isValid(academicYearId)) {
+            query.academicYear = academicYearId;
+        }
+
+        let assignment = await ClassTeacherAssignment.findOne(query).populate("program");
+        
+        // If not found with specific academicYear, fallback to any active assignment for this class
+        if (!assignment && classLevelId) {
+            assignment = await ClassTeacherAssignment.findOne({
+                teacher: userAuth._id,
+                isActive: true,
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(classLevelId) ? [{ classLevel: classLevelId }] : []),
+                    { classLevel: classLevelId },
+                ],
+            }).populate("program");
+        }
+
+        // If still not found, fallback to teacher's primary active assignment
+        if (!assignment) {
+            assignment = await ClassTeacherAssignment.findOne({
+                teacher: userAuth._id,
+                isActive: true,
+            }).populate("program");
+        }
+
+        if (assignment && assignment.program) {
+            const progDoc = assignment.program;
+            return { id: (progDoc._id || progDoc).toString(), doc: progDoc };
+        }
+
+        // Fallback: check teacher profile program
+        const teacherDoc = await Teacher.findById(userAuth._id);
+        if (teacherDoc?.program) {
+            const rawP = teacherDoc.program.toString().trim();
+            if (mongoose.Types.ObjectId.isValid(rawP)) {
+                const prog = await Program.findById(rawP);
+                if (prog) return { id: prog._id.toString(), doc: prog };
+            }
+            const prog = await Program.findOne({
+                name: { $regex: new RegExp(`^${rawP.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`, "i") },
+            });
+            if (prog) return { id: prog._id.toString(), doc: prog };
+        }
+    }
+
+    return null;
+};
+
+// Helper: Filter an array of populated student documents by target program
+const filterStudentsByProgram = (studentsList, targetProgramId) => {
+    if (!targetProgramId) return studentsList;
+    const targetIdStr = targetProgramId.toString();
+    return studentsList.filter((stu) => {
+        if (!stu.program) return false;
+        const stuProgId = stu.program._id ? stu.program._id.toString() : stu.program.toString();
+        const stuProgName = (stu.program.name || "").trim().toLowerCase();
+        return stuProgId === targetIdStr || stuProgName === targetIdStr.toLowerCase();
+    });
+};
 
 // Helper: Verify if teacher is authorized to record results for given subject & class
 const verifyTeacherAuthorization = async (teacherId, classLevelDoc, subjectDoc) => {
     const teacher = await Teacher.findById(teacherId);
     if (!teacher) {
         return { authorized: false, reason: "Teacher profile not found." };
+    }
+
+    // Check if teacher is assigned Class Teacher for this class
+    const isClassTeacher = await ClassTeacherAssignment.exists({
+        teacher: teacherId,
+        isActive: true,
+        $or: [
+            ...(classLevelDoc._id ? [{ classLevel: classLevelDoc._id }] : []),
+            ...(classLevelDoc.name ? [{ classLevel: classLevelDoc.name }] : []),
+        ],
+    });
+    if (isClassTeacher) {
+        return { authorized: true };
     }
 
     // Check subject authorization if teacher has assigned subject(s)
@@ -107,6 +213,79 @@ const getDefaultPrincipalComment = (average) => {
     return "Academic counseling recommended to assist this student in progressing.";
 };
 
+// Helper: Ensure all recorded subject results from StudentSubjectResult are in StudentReportCard
+const syncMissingReportCardSubjects = async (reportCard, studentId) => {
+    if (!reportCard) return;
+    try {
+        const studentSubjectResults = await StudentSubjectResult.find({
+            $or: [
+                { student: studentId },
+                { studentID: reportCard.studentID || reportCard.student?.StudentId },
+            ].filter(Boolean),
+            academicYear: reportCard.academicYear?._id || reportCard.academicYear,
+            academicTerm: reportCard.academicTerm?._id || reportCard.academicTerm,
+        }).populate("subject");
+
+        if (studentSubjectResults.length > 0) {
+            const existingSubjectNames = new Set(
+                (reportCard.subjectResults || []).map((sr) =>
+                    (sr.subjectName || sr.subject?.name || "").toLowerCase().trim()
+                )
+            );
+            const existingSubjectIds = new Set(
+                (reportCard.subjectResults || []).map((sr) =>
+                    (sr.subject?._id || sr.subject || "").toString()
+                )
+            );
+
+            let hasMissing = false;
+            for (const sr of studentSubjectResults) {
+                const subId = (sr.subject?._id || sr.subject || "").toString();
+                const subName = (sr.subjectName || sr.subject?.name || "").toLowerCase().trim();
+                if (!existingSubjectIds.has(subId) && !existingSubjectNames.has(subName)) {
+                    hasMissing = true;
+                    break;
+                }
+            }
+
+            if (hasMissing) {
+                reportCard.subjectResults = studentSubjectResults.map((sr) => {
+                    const totalScore = sr.totalScore !== undefined ? sr.totalScore : (sr.testScore || 0) + (sr.examScore || 0);
+                    const grade = sr.grade !== undefined ? sr.grade : totalScore;
+                    return {
+                        subject: sr.subject?._id || sr.subject,
+                        subjectName: sr.subjectName || sr.subject?.name || "Subject",
+                        exam: null,
+                        examName: "Continuous Assessment & Exam",
+                        testScore: sr.testScore || 0,
+                        examScore: sr.examScore || 0,
+                        score: totalScore,
+                        totalMark: 100,
+                        grade,
+                        letterGrade: getLetterGrade(grade),
+                        remarks: sr.remark || (grade >= 40 ? "Credit" : "Fail"),
+                        status: grade >= 40 ? "Passed" : "Failed",
+                    };
+                });
+
+                let grandTotal = 0;
+                reportCard.subjectResults.forEach((sr) => {
+                    grandTotal += Number(sr.score || 0);
+                });
+                const count = reportCard.subjectResults.length;
+                reportCard.totalScore = grandTotal;
+                reportCard.totalMaxScore = count * 100;
+                reportCard.averageScore = count > 0 ? Number((grandTotal / count).toFixed(1)) : 0;
+                reportCard.overallGrade = getLetterGrade(reportCard.averageScore);
+                reportCard.overallRemark = getSubjectRemark(reportCard.averageScore);
+                await reportCard.save();
+            }
+        }
+    } catch (err) {
+        console.error("Auto sync report card subjects error:", err.message);
+    }
+};
+
 //@desc Get class subject result sheet for entering marks (Shared Class Result Sheet)
 //@route GET /api/v1/report-cards/class/:classLevelId/subject-sheet
 //@access Private (Teacher or Admin)
@@ -148,6 +327,9 @@ exports.getClassSubjectSheetCtrl = AsyncHandler(async (req, res) => {
         ? new RegExp(`(^|\\b|\\D)${classNum}(\\D|\\b|$)`, "i")
         : new RegExp(`^${classLevelDoc.name.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, "\\$&")}$`, "i");
 
+    const explicitProgram = req.query.programId || req.query.program;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
     const studentFilter = {
         $or: [
             { _id: { $in: classLevelDoc.students || [] } },
@@ -158,6 +340,10 @@ exports.getClassSubjectSheetCtrl = AsyncHandler(async (req, res) => {
         ],
     };
 
+    if (targetProgram) {
+        studentFilter.program = targetProgram.id;
+    }
+
     let students = await Student.find(studentFilter)
         .select("_id StudentId name email currentClassLevel program subject enrolledSubjects")
         .populate("program")
@@ -165,14 +351,20 @@ exports.getClassSubjectSheetCtrl = AsyncHandler(async (req, res) => {
         .sort({ name: 1 });
 
     if (students.length === 0 && req.userAuth?._id) {
-        students = await Student.find({ assignedTeacher: req.userAuth._id })
+        const fallbackFilter = { assignedTeacher: req.userAuth._id };
+        if (targetProgram) fallbackFilter.program = targetProgram.id;
+        students = await Student.find(fallbackFilter)
             .select("_id StudentId name email currentClassLevel program subject enrolledSubjects")
             .populate("program")
             .populate("enrolledSubjects.subject")
             .sort({ name: 1 });
     }
 
-    // Filter students by class level
+    // Filter students by class level and program
+    if (targetProgram) {
+        students = filterStudentsByProgram(students, targetProgram.id);
+    }
+
     const targetSubName = (subjectDoc.name || "").toString().trim().toLowerCase();
     const targetSubId = subjectDoc._id.toString();
 
@@ -287,6 +479,7 @@ exports.getClassSubjectSheetCtrl = AsyncHandler(async (req, res) => {
             recordedCount: offeringStudents.filter((s) => resultMap.has(s._id.toString())).length,
             isCompleted: offeringStudents.length > 0 && offeringStudents.every((s) => resultMap.has(s._id.toString())),
             students: rows,
+            program: targetProgram?.doc || null,
         },
     });
 });
@@ -315,6 +508,10 @@ exports.getClassSubjectsProgressCtrl = AsyncHandler(async (req, res) => {
     if (!academicYearDoc) return res.status(404).json({ status: "failed", message: "Academic Year not found." });
     if (!academicTermDoc) return res.status(404).json({ status: "failed", message: "Academic Term not found." });
 
+    // Resolve target program for class teacher or explicit request
+    const explicitProgram = req.query.programId || req.query.program;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
     // Students count in this class
     const extractDigits = (str) => (str ? (str.match(/\d+/) || [null])[0] : null);
     const classNum = extractDigits(classLevelDoc.name);
@@ -332,9 +529,15 @@ exports.getClassSubjectsProgressCtrl = AsyncHandler(async (req, res) => {
         ],
     };
 
+    if (targetProgram) {
+        studentFilter.program = targetProgram.id;
+    }
+
     let totalStudents = await Student.countDocuments(studentFilter);
     if (totalStudents === 0 && req.userAuth?._id) {
-        totalStudents = await Student.countDocuments({ assignedTeacher: req.userAuth._id });
+        const fallbackFilter = { assignedTeacher: req.userAuth._id };
+        if (targetProgram) fallbackFilter.program = targetProgram.id;
+        totalStudents = await Student.countDocuments(fallbackFilter);
     }
 
     // Resolve subjects for this class
@@ -438,12 +641,17 @@ exports.getClassSubjectsProgressCtrl = AsyncHandler(async (req, res) => {
     const completedSubjects = progressList.filter((p) => p.isCompleted).length;
     const allCompleted = totalSubjects > 0 && completedSubjects === totalSubjects;
 
-    // Check overall report status for this class & term
-    const existingCard = await StudentReportCard.findOne({
+    // Check overall report status for this class & term & program
+    const cardQuery = {
         academicYear: academicYearId,
         academicTerm: academicTermId,
         classLevel: classLevelId,
-    });
+    };
+    if (targetProgram) {
+        cardQuery.program = targetProgram.id;
+    }
+
+    const existingCard = await StudentReportCard.findOne(cardQuery);
 
     res.status(200).json({
         status: "Success",
@@ -451,6 +659,7 @@ exports.getClassSubjectsProgressCtrl = AsyncHandler(async (req, res) => {
             classLevel: classLevelDoc,
             academicYear: academicYearDoc,
             academicTerm: academicTermDoc,
+            program: targetProgram?.doc || null,
             totalStudents,
             totalSubjects,
             completedSubjects,
@@ -747,6 +956,9 @@ exports.calculateClassReportCardsCtrl = AsyncHandler(async (req, res) => {
         ? new RegExp(`(^|\\b|\\D)${classNum}(\\D|\\b|$)`, "i")
         : new RegExp(`^${classLevelDoc.name.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, "\\$&")}$`, "i");
 
+    const explicitProgram = req.body.programId || req.body.program || req.query.programId || req.query.program;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
     const studentFilter = {
         $or: [
             { _id: { $in: classLevelDoc.students || [] } },
@@ -757,20 +969,32 @@ exports.calculateClassReportCardsCtrl = AsyncHandler(async (req, res) => {
         ],
     };
 
+    if (targetProgram) {
+        studentFilter.program = targetProgram.id;
+    }
+
     let students = await Student.find(studentFilter)
         .select("_id StudentId name email currentClassLevel program")
         .populate("program");
 
     if (students.length === 0 && req.userAuth?._id) {
-        students = await Student.find({ assignedTeacher: req.userAuth._id })
+        const fallbackFilter = { assignedTeacher: req.userAuth._id };
+        if (targetProgram) fallbackFilter.program = targetProgram.id;
+        students = await Student.find(fallbackFilter)
             .select("_id StudentId name email currentClassLevel program")
             .populate("program");
     }
 
+    // Filter strictly by target program
+    if (targetProgram) {
+        students = filterStudentsByProgram(students, targetProgram.id);
+    }
+
     if (students.length === 0) {
+        const programNote = targetProgram ? ` in program "${targetProgram.doc?.name || targetProgram.id}"` : "";
         return res.status(404).json({
             status: "failed",
-            message: `No registered students found in class "${classLevelDoc.name}".`,
+            message: `No registered students found in class "${classLevelDoc.name}"${programNote}.`,
         });
     }
 
@@ -1015,12 +1239,15 @@ exports.calculateClassReportCardsCtrl = AsyncHandler(async (req, res) => {
             continue;
         }
 
+        const progToSave = targetProgram?.id || item.student.program?._id || item.student.program || null;
+
         const updateData = {
             student: item.student._id,
             studentID: item.student.StudentId,
             academicYear: academicYearId,
             academicTerm: academicTermId,
             classLevel: classLevelId,
+            program: progToSave,
             subjectResults: item.subjectResults,
             totalScore: item.totalScore,
             totalMaxScore: item.totalMaxScore,
@@ -1038,17 +1265,20 @@ exports.calculateClassReportCardsCtrl = AsyncHandler(async (req, res) => {
             published: false,
         };
 
+        const cardLookup = {
+            student: item.student._id,
+            academicYear: academicYearId,
+            academicTerm: academicTermId,
+            classLevel: classLevelId,
+        };
+
         const card = await StudentReportCard.findOneAndUpdate(
-            {
-                student: item.student._id,
-                academicYear: academicYearId,
-                academicTerm: academicTermId,
-                classLevel: classLevelId,
-            },
+            cardLookup,
             { $set: updateData },
             { new: true, upsert: true, runValidators: true }
         )
             .populate("student", "name email StudentId currentClassLevel program")
+            .populate("program", "name code")
             .populate("academicYear", "name")
             .populate("academicTerm", "name")
             .populate("classLevel", "name");
@@ -1061,6 +1291,7 @@ exports.calculateClassReportCardsCtrl = AsyncHandler(async (req, res) => {
         message: `Calculated report cards for ${savedCards.length} students in ${classLevelDoc.name} successfully.`,
         data: savedCards,
         classLevel: classLevelDoc,
+        program: targetProgram?.doc || null,
         academicYear: academicYearDoc,
         academicTerm: academicTermDoc,
         totalStudents: savedCards.length,
@@ -1098,6 +1329,9 @@ exports.getClassReportCardsOverviewCtrl = AsyncHandler(async (req, res) => {
         ? new RegExp(`(^|\\b|\\D)${classNum}(\\D|\\b|$)`, "i")
         : new RegExp(`^${classLevelDoc.name.replace(/[-[\]{}()*+?.,\\^$|#\\s]/g, "\\$&")}$`, "i");
 
+    const explicitProgram = req.query.programId || req.query.program;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
     const studentFilter = {
         $or: [
             { _id: { $in: classLevelDoc.students || [] } },
@@ -1108,6 +1342,10 @@ exports.getClassReportCardsOverviewCtrl = AsyncHandler(async (req, res) => {
         ],
     };
 
+    if (targetProgram) {
+        studentFilter.program = targetProgram.id;
+    }
+
     let students = await Student.find(studentFilter)
         .select("_id StudentId name email currentClassLevel program enrolledSubjects subject")
         .populate("program", "name subjects")
@@ -1115,11 +1353,18 @@ exports.getClassReportCardsOverviewCtrl = AsyncHandler(async (req, res) => {
         .sort({ name: 1 });
 
     if (students.length === 0 && req.userAuth?._id) {
-        students = await Student.find({ assignedTeacher: req.userAuth._id })
+        const fallbackFilter = { assignedTeacher: req.userAuth._id };
+        if (targetProgram) fallbackFilter.program = targetProgram.id;
+        students = await Student.find(fallbackFilter)
             .select("_id StudentId name email currentClassLevel program enrolledSubjects subject")
             .populate("program", "name subjects")
             .populate("enrolledSubjects.subject", "name classLevel")
             .sort({ name: 1 });
+    }
+
+    // Filter strictly by target program
+    if (targetProgram) {
+        students = filterStudentsByProgram(students, targetProgram.id);
     }
 
     // 2. Fetch all StudentSubjectResult for this class/year/term in ONE query
@@ -1208,8 +1453,33 @@ exports.getClassReportCardsOverviewCtrl = AsyncHandler(async (req, res) => {
             });
         }
 
-        const registeredSubjects = Array.from(regSubjectsMap.values());
+        // Also ensure any subject for which this student already has a recorded result in StudentSubjectResult is included in regSubjectsMap!
         const sResults = studentResultsMap.get(student._id.toString()) || [];
+        sResults.forEach((r) => {
+            const sId = (r.subject?._id || r.subject)?.toString();
+            if (sId && !regSubjectsMap.has(sId)) {
+                regSubjectsMap.set(sId, {
+                    _id: r.subject?._id || r.subject,
+                    name: r.subjectName || r.subject?.name || "Subject",
+                });
+            }
+        });
+
+        // Also check if existingCard has any additional subjectResults
+        const existingCard = cardMap.get(student._id.toString()) || null;
+        if (existingCard && Array.isArray(existingCard.subjectResults)) {
+            existingCard.subjectResults.forEach((cr) => {
+                const sId = cr.subject?.toString();
+                if (sId && !regSubjectsMap.has(sId)) {
+                    regSubjectsMap.set(sId, {
+                        _id: cr.subject,
+                        name: cr.subjectName || "Subject",
+                    });
+                }
+            });
+        }
+
+        const registeredSubjects = Array.from(regSubjectsMap.values());
 
         const submittedSubjectDetails = [];
         const pendingSubjects = [];
@@ -1250,7 +1520,6 @@ exports.getClassReportCardsOverviewCtrl = AsyncHandler(async (req, res) => {
             : null;
 
         const evaluation = averageScore !== null ? getOverallEvaluation(averageScore) : null;
-        const existingCard = cardMap.get(student._id.toString()) || null;
 
         if (isFullySubmitted) {
             fullySubmittedCount++;
@@ -1322,11 +1591,13 @@ exports.getClassReportCardsOverviewCtrl = AsyncHandler(async (req, res) => {
         message: "Class results overview fetched successfully",
         data: {
             classLevel: classLevelDoc,
+            program: targetProgram?.doc || null,
             academicYear: academicYearDoc,
             academicTerm: academicTermDoc,
             students: studentOverviews,
             summary: {
                 totalStudents: students.length,
+                program: targetProgram?.doc || null,
                 fullySubmittedCount,
                 pendingCount,
                 allCompleted: students.length > 0 && fullySubmittedCount === students.length,
@@ -1344,6 +1615,9 @@ exports.getClassReportCardsCtrl = AsyncHandler(async (req, res) => {
     const { classLevelId } = req.params;
     const { academicYearId, academicTermId } = req.query;
 
+    const explicitProgram = req.query.programId || req.query.program;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
     const filter = {
         classLevel: classLevelId,
         "subjectResults.0": { $exists: true }, // Only return report cards that have recorded results
@@ -1351,8 +1625,9 @@ exports.getClassReportCardsCtrl = AsyncHandler(async (req, res) => {
     if (academicYearId) filter.academicYear = academicYearId;
     if (academicTermId) filter.academicTerm = academicTermId;
 
-    const cards = await StudentReportCard.find(filter)
+    let cards = await StudentReportCard.find(filter)
         .populate("student", "name email StudentId currentClassLevel program")
+        .populate("program", "name code")
         .populate("academicYear", "name")
         .populate("academicTerm", "name")
         .populate("classLevel", "name")
@@ -1360,20 +1635,204 @@ exports.getClassReportCardsCtrl = AsyncHandler(async (req, res) => {
         .populate("submittedBy", "name email")
         .sort({ position: 1 });
 
+    if (targetProgram) {
+        const tId = targetProgram.id.toString();
+        cards = cards.filter((c) => {
+            const cardProgId = c.program ? (c.program._id || c.program).toString() : null;
+            const stuProgId = c.student?.program ? (c.student.program._id || c.student.program).toString() : null;
+            return cardProgId === tId || stuProgId === tId;
+        });
+    }
+
     res.status(200).json({
         status: "Success",
         message: "Class report cards fetched successfully",
         data: cards,
+        program: targetProgram?.doc || null,
         totalCount: cards.length,
     });
 });
 
-//@desc Teacher submit class results to admin
+//@desc Teacher submit class results to admin (Individual or Batch)
 //@route POST /api/v1/report-cards/class/submit
 //@access Private (Teacher only)
 exports.submitClassReportCardsCtrl = AsyncHandler(async (req, res) => {
-    const { classLevelId, academicYearId, academicTermId } = req.body;
+    const { classLevelId, academicYearId, academicTermId, reportCardId, studentId } = req.body;
 
+    // A. Single student submission
+    if (reportCardId || studentId) {
+        let card = null;
+        if (reportCardId && mongoose.Types.ObjectId.isValid(reportCardId)) {
+            card = await StudentReportCard.findById(reportCardId)
+                .populate("student", "name StudentId currentClassLevel")
+                .populate("classLevel", "name");
+        }
+        if (!card && studentId) {
+            const studentQuery = {
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(studentId) ? [{ student: studentId }] : []),
+                    { studentID: studentId },
+                ],
+            };
+            if (academicYearId) studentQuery.academicYear = academicYearId;
+            if (academicTermId) studentQuery.academicTerm = academicTermId;
+            if (classLevelId) studentQuery.classLevel = classLevelId;
+            card = await StudentReportCard.findOne(studentQuery)
+                .populate("student", "name StudentId currentClassLevel")
+                .populate("classLevel", "name");
+        }
+
+        if (!card && studentId) {
+            const studentDoc = await Student.findOne({
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(studentId) ? [{ _id: studentId }] : []),
+                    { StudentId: studentId },
+                ],
+            });
+
+            if (studentDoc) {
+                const subjectResultsQuery = {
+                    student: studentDoc._id,
+                    ...(academicYearId ? { academicYear: academicYearId } : {}),
+                    ...(academicTermId ? { academicTerm: academicTermId } : {}),
+                };
+                if (classLevelId) subjectResultsQuery.classLevel = classLevelId;
+
+                const recordedScores = await StudentSubjectResult.find(subjectResultsQuery).populate("subject", "name");
+                if (recordedScores.length > 0) {
+                    const subjectResults = recordedScores.map((s) => ({
+                        subject: s.subject?._id || s.subject,
+                        subjectName: s.subjectName || s.subject?.name || "Subject",
+                        testScore: s.testScore,
+                        examScore: s.examScore,
+                        score: s.totalScore,
+                        totalMark: 100,
+                        grade: s.grade,
+                        letterGrade: getLetterGrade(s.grade),
+                        remarks: s.remark,
+                        status: s.grade >= 40 ? "Passed" : "Failed",
+                    }));
+
+                    let totalScore = 0;
+                    subjectResults.forEach((sr) => {
+                        totalScore += Number(sr.score || 0);
+                    });
+                    const count = subjectResults.length;
+                    const averageScore = count > 0 ? Number((totalScore / count).toFixed(1)) : 0;
+
+                    card = new StudentReportCard({
+                        student: studentDoc._id,
+                        studentID: studentDoc.StudentId,
+                        academicYear: academicYearId,
+                        academicTerm: academicTermId,
+                        classLevel: classLevelId || studentDoc.currentClassLevel,
+                        program: studentDoc.program,
+                        subjectResults,
+                        totalScore,
+                        totalMaxScore: count * 100,
+                        averageScore,
+                        overallGrade: getLetterGrade(averageScore),
+                        overallRemark: getSubjectRemark(averageScore),
+                        status: "submitted_to_admin",
+                        submittedBy: req.userAuth?._id,
+                        submittedAt: new Date(),
+                    });
+                    await card.save();
+
+                    // Also sync teacher submission to individual ExamResult records so they appear in Admin results queue
+                    await ExamResult.updateMany(
+                        {
+                            $or: [
+                                ...(studentDoc.StudentId ? [{ studentID: studentDoc.StudentId }] : []),
+                                { studentID: studentDoc._id.toString() },
+                                { student: studentDoc._id },
+                            ],
+                            ...(academicYearId ? { academicYear: academicYearId } : {}),
+                            ...(academicTermId ? { academicTerm: academicTermId } : {}),
+                        },
+                        {
+                            $set: {
+                                isTeacherPublished: true,
+                                teacherPublishedAt: new Date(),
+                                teacherPublishedBy: req.userAuth?._id,
+                            }
+                        }
+                    );
+
+                    return res.status(200).json({
+                        status: "Success",
+                        message: `Successfully submitted report card for ${studentDoc.name} to Admin for review.`,
+                        data: card,
+                    });
+                }
+            }
+        }
+
+        if (!card) {
+            return res.status(404).json({
+                status: "failed",
+                message: "Student report card not found for submission. Please ensure subject marks are recorded first.",
+            });
+        }
+
+        // Validate that student has subject results recorded
+        if (!Array.isArray(card.subjectResults) || card.subjectResults.length === 0) {
+            return res.status(400).json({
+                status: "failed",
+                message: `Cannot submit result for ${card.student?.name || card.studentID}. No subject scores have been entered yet.`,
+            });
+        }
+
+        const prevStatus = card.status || "draft";
+        card.status = "submitted_to_admin";
+        card.submittedBy = req.userAuth?._id;
+        card.submittedAt = new Date();
+        card.rejectionReason = "";
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "submitted",
+            performedBy: req.userAuth?._id,
+            performerModel: "Teacher",
+            performerName: req.userAuth?.name || "Class Teacher",
+            timestamp: new Date(),
+            reason: "Submitted to Admin for review and approval",
+            previousStatus: prevStatus,
+            newStatus: "submitted_to_admin",
+        });
+
+        await card.save();
+
+        const sId = card.student?._id || card.student;
+        const sReg = card.studentID || card.student?.StudentId;
+        await ExamResult.updateMany(
+            {
+                $or: [
+                    ...(sReg ? [{ studentID: sReg }] : []),
+                    ...(sId ? [{ studentID: sId.toString() }, { student: sId }] : []),
+                ],
+                ...(card.academicYear ? { academicYear: card.academicYear } : {}),
+                ...(card.academicTerm ? { academicTerm: card.academicTerm } : {}),
+            },
+            {
+                $set: {
+                    isTeacherPublished: true,
+                    teacherPublishedAt: new Date(),
+                    teacherPublishedBy: req.userAuth?._id,
+                }
+            }
+        );
+
+        return res.status(200).json({
+            status: "Success",
+            message: `Successfully submitted report card for ${card.student?.name || card.studentID} to Admin for review.`,
+            data: card,
+        });
+    }
+
+    // B. Bulk class submission
     if (!classLevelId || !academicYearId || !academicTermId) {
         return res.status(400).json({
             status: "failed",
@@ -1381,39 +1840,403 @@ exports.submitClassReportCardsCtrl = AsyncHandler(async (req, res) => {
         });
     }
 
-    const cards = await StudentReportCard.find({
+    const explicitProgram = req.body.programId || req.body.program || req.query.programId;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
+    // Auto-compile any missing student cards from StudentSubjectResult in this class before submitting
+    const bulkSubResultsQuery = {
         classLevel: classLevelId,
         academicYear: academicYearId,
         academicTerm: academicTermId,
-    });
+    };
+    const allSubjectResults = await StudentSubjectResult.find(bulkSubResultsQuery).populate("subject", "name");
+    const studentResultsMap = new Map();
+    for (const sr of allSubjectResults) {
+        const sKey = sr.student.toString();
+        if (!studentResultsMap.has(sKey)) studentResultsMap.set(sKey, []);
+        studentResultsMap.get(sKey).push(sr);
+    }
 
-    if (cards.length === 0) {
-        return res.status(404).json({
-            status: "failed",
-            message: "No calculated report cards found for this class and term. Please calculate results first.",
+    for (const [sId, sResults] of studentResultsMap) {
+        const existing = await StudentReportCard.findOne({
+            student: sId,
+            academicYear: academicYearId,
+            academicTerm: academicTermId,
+            classLevel: classLevelId,
+        });
+
+        if (!existing && sResults.length > 0) {
+            const stu = await Student.findById(sId);
+            if (stu) {
+                const subjectResults = sResults.map((s) => ({
+                    subject: s.subject?._id || s.subject,
+                    subjectName: s.subjectName || s.subject?.name || "Subject",
+                    testScore: s.testScore,
+                    examScore: s.examScore,
+                    score: s.totalScore,
+                    totalMark: 100,
+                    grade: s.grade,
+                    letterGrade: getLetterGrade(s.grade),
+                    remarks: s.remark,
+                    status: s.grade >= 40 ? "Passed" : "Failed",
+                }));
+
+                let totalScore = 0;
+                subjectResults.forEach((sr) => {
+                    totalScore += Number(sr.score || 0);
+                });
+                const count = subjectResults.length;
+                const averageScore = count > 0 ? Number((totalScore / count).toFixed(1)) : 0;
+
+                const newCard = new StudentReportCard({
+                    student: stu._id,
+                    studentID: stu.StudentId,
+                    academicYear: academicYearId,
+                    academicTerm: academicTermId,
+                    classLevel: classLevelId,
+                    program: stu.program,
+                    subjectResults,
+                    totalScore,
+                    totalMaxScore: count * 100,
+                    averageScore,
+                    overallGrade: getLetterGrade(averageScore),
+                    overallRemark: getSubjectRemark(averageScore),
+                    status: "calculated",
+                });
+                await newCard.save();
+            }
+        }
+    }
+
+    let cards = await StudentReportCard.find({
+        classLevel: classLevelId,
+        academicYear: academicYearId,
+        academicTerm: academicTermId,
+    }).populate("student", "name StudentId program");
+
+    if (targetProgram) {
+        const tId = targetProgram.id.toString();
+        cards = cards.filter((c) => {
+            const cardProgId = c.program ? (c.program._id || c.program).toString() : null;
+            const stuProgId = c.student?.program ? (c.student.program._id || c.student.program).toString() : null;
+            return cardProgId === tId || stuProgId === tId;
         });
     }
 
-    const updateResult = await StudentReportCard.updateMany(
-        {
-            classLevel: classLevelId,
-            academicYear: academicYearId,
-            academicTerm: academicTermId,
-            status: { $in: ["draft", "calculated", "rejected"] },
-        },
-        {
-            $set: {
-                status: "submitted",
-                submittedBy: req.userAuth?._id,
-                submittedAt: new Date(),
-                rejectionReason: "",
-            },
+    if (cards.length === 0) {
+        const progNotice = targetProgram ? ` for program "${targetProgram.doc?.name || targetProgram.id}"` : "";
+        return res.status(404).json({
+            status: "failed",
+            message: `No report cards found for this class and term${progNotice}. Please enter subject marks and calculate results first.`,
+        });
+    }
+
+    // Filter eligible cards (must have recorded subject results and not already published)
+    const eligibleCards = cards.filter((c) => {
+        const hasScores = Array.isArray(c.subjectResults) && c.subjectResults.length > 0;
+        const isNotPublished = !c.published;
+        return hasScores && isNotPublished;
+    });
+
+    if (eligibleCards.length === 0) {
+        return res.status(400).json({
+            status: "failed",
+            message: "No eligible complete report cards found to submit. All cards either lack subject marks or are already published.",
+        });
+    }
+
+    const eligibleIds = eligibleCards.map((c) => c._id);
+    const now = new Date();
+
+    for (const card of eligibleCards) {
+        const prevStatus = card.status || "draft";
+        card.status = "submitted_to_admin";
+        card.submittedBy = req.userAuth?._id;
+        card.submittedAt = now;
+        card.rejectionReason = "";
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
         }
-    );
+        card.reviewHistory.push({
+            action: "submitted",
+            performedBy: req.userAuth?._id,
+            performerModel: "Teacher",
+            performerName: req.userAuth?.name || "Class Teacher",
+            timestamp: now,
+            reason: "Batch submitted to Admin for review and approval",
+            previousStatus: prevStatus,
+            newStatus: "submitted_to_admin",
+        });
+
+        await card.save();
+    }
+
+    // Also sync teacher submission to individual ExamResult records for all submitted students
+    const bulkStudentIds = eligibleCards.map(c => c.student?._id || c.student).filter(Boolean);
+    const bulkStudentRegNos = eligibleCards.map(c => c.studentID || c.student?.StudentId).filter(Boolean);
+    if (bulkStudentIds.length > 0 || bulkStudentRegNos.length > 0) {
+        await ExamResult.updateMany(
+            {
+                $or: [
+                    { studentID: { $in: bulkStudentRegNos } },
+                    { studentID: { $in: bulkStudentIds.map(id => id.toString()) } },
+                    { student: { $in: bulkStudentIds } },
+                ],
+                ...(academicYearId ? { academicYear: academicYearId } : {}),
+                ...(academicTermId ? { academicTerm: academicTermId } : {}),
+            },
+            {
+                $set: {
+                    isTeacherPublished: true,
+                    teacherPublishedAt: now,
+                    teacherPublishedBy: req.userAuth?._id,
+                }
+            }
+        );
+    }
+
+    const skippedCount = cards.length - eligibleCards.length;
 
     res.status(200).json({
         status: "Success",
-        message: `Successfully submitted ${updateResult.modifiedCount || cards.length} student report cards to Admin for review.`,
+        message: `Successfully submitted ${eligibleCards.length} student report cards to Admin for review.${skippedCount > 0 ? ` (${skippedCount} incomplete or already published cards were skipped)` : ""}`,
+        submittedCount: eligibleCards.length,
+        skippedCount,
+        totalCount: cards.length,
+    });
+});
+
+//@desc Teacher resubmit corrected student results to admin (Individual or Batch)
+//@route POST /api/v1/report-cards/class/resubmit
+//@access Private (Teacher only)
+exports.resubmitClassReportCardsCtrl = AsyncHandler(async (req, res) => {
+    const { classLevelId, academicYearId, academicTermId, reportCardId, studentId } = req.body;
+
+    // A. Single student resubmission
+    if (reportCardId || studentId) {
+        let card = null;
+        if (reportCardId && mongoose.Types.ObjectId.isValid(reportCardId)) {
+            card = await StudentReportCard.findById(reportCardId);
+        }
+        if (!card && studentId) {
+            const studentQuery = {
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(studentId) ? [{ student: studentId }] : []),
+                    { studentID: studentId },
+                ],
+            };
+            if (academicYearId) studentQuery.academicYear = academicYearId;
+            if (academicTermId) studentQuery.academicTerm = academicTermId;
+            if (classLevelId) studentQuery.classLevel = classLevelId;
+            card = await StudentReportCard.findOne(studentQuery);
+        }
+
+        if (!card) {
+            return res.status(404).json({ status: "failed", message: "Report card not found for resubmission." });
+        }
+
+        // Fetch latest saved subject scores from StudentSubjectResult from database
+        const latestScores = await StudentSubjectResult.find({
+            student: card.student,
+            academicYear: card.academicYear,
+            academicTerm: card.academicTerm,
+        }).populate("subject", "name");
+
+        if (latestScores.length > 0) {
+            card.subjectResults = latestScores.map((s) => ({
+                subject: s.subject?._id || s.subject,
+                subjectName: s.subjectName || s.subject?.name || "Subject",
+                testScore: s.testScore,
+                examScore: s.examScore,
+                score: s.totalScore,
+                totalMark: 100,
+                grade: s.grade,
+                letterGrade: getLetterGrade(s.grade),
+                remarks: s.remark,
+                status: s.grade >= 40 ? "Passed" : "Failed",
+            }));
+
+            let grandTotal = 0;
+            card.subjectResults.forEach((sr) => {
+                grandTotal += Number(sr.score || 0);
+            });
+            const count = card.subjectResults.length;
+            card.totalScore = grandTotal;
+            card.totalMaxScore = count * 100;
+            card.averageScore = count > 0 ? Number((grandTotal / count).toFixed(1)) : 0;
+            card.overallGrade = getLetterGrade(card.averageScore);
+            card.overallRemark = getSubjectRemark(card.averageScore);
+        }
+
+        const prevStatus = card.status || "returned_for_correction";
+        const oldRejectionReason = card.rejectionReason || "";
+        card.status = "resubmitted";
+        card.resubmittedBy = req.userAuth?._id;
+        card.resubmittedAt = new Date();
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "resubmitted",
+            performedBy: req.userAuth?._id,
+            performerModel: "Teacher",
+            performerName: req.userAuth?.name || "Class Teacher",
+            timestamp: new Date(),
+            reason: oldRejectionReason ? `Corrected in response to: "${oldRejectionReason}"` : "Resubmitted after correction",
+            previousStatus: prevStatus,
+            newStatus: "resubmitted",
+        });
+
+        await card.save();
+
+        const sId = card.student?._id || card.student;
+        const sReg = card.studentID || card.student?.StudentId;
+        await ExamResult.updateMany(
+            {
+                $or: [
+                    ...(sReg ? [{ studentID: sReg }] : []),
+                    ...(sId ? [{ studentID: sId.toString() }, { student: sId }] : []),
+                ],
+                ...(card.academicYear ? { academicYear: card.academicYear } : {}),
+                ...(card.academicTerm ? { academicTerm: card.academicTerm } : {}),
+            },
+            {
+                $set: {
+                    isTeacherPublished: true,
+                    teacherPublishedAt: new Date(),
+                    teacherPublishedBy: req.userAuth?._id,
+                }
+            }
+        );
+
+        return res.status(200).json({
+            status: "Success",
+            message: `Successfully resubmitted corrected results for ${card.studentID} to Admin for re-approval.`,
+            data: card,
+        });
+    }
+
+    // B. Bulk resubmission for all rejected/returned results in the class
+    if (!classLevelId || !academicYearId || !academicTermId) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Class Level, Academic Year, and Academic Term are required to resubmit results.",
+        });
+    }
+
+    const explicitProgram = req.body.programId || req.body.program || req.query.programId;
+    const targetProgram = await resolveTargetProgram(req.userAuth, classLevelId, academicYearId, explicitProgram);
+
+    let cards = await StudentReportCard.find({
+        classLevel: classLevelId,
+        academicYear: academicYearId,
+        academicTerm: academicTermId,
+        status: { $in: ["rejected", "returned_for_correction"] },
+    }).populate("student", "name StudentId program");
+
+    if (targetProgram) {
+        const tId = targetProgram.id.toString();
+        cards = cards.filter((c) => {
+            const cardProgId = c.program ? (c.program._id || c.program).toString() : null;
+            const stuProgId = c.student?.program ? (c.student.program._id || c.student.program).toString() : null;
+            return cardProgId === tId || stuProgId === tId;
+        });
+    }
+
+    if (cards.length === 0) {
+        const progNotice = targetProgram ? ` for program "${targetProgram.doc?.name || targetProgram.id}"` : "";
+        return res.status(404).json({
+            status: "failed",
+            message: `No returned/rejected report cards found in this class${progNotice} to resubmit.`,
+        });
+    }
+
+    const now = new Date();
+    for (const card of cards) {
+        const latestScores = await StudentSubjectResult.find({
+            student: card.student,
+            academicYear: card.academicYear,
+            academicTerm: card.academicTerm,
+        }).populate("subject", "name");
+
+        if (latestScores.length > 0) {
+            card.subjectResults = latestScores.map((s) => ({
+                subject: s.subject?._id || s.subject,
+                subjectName: s.subjectName || s.subject?.name || "Subject",
+                testScore: s.testScore,
+                examScore: s.examScore,
+                score: s.totalScore,
+                totalMark: 100,
+                grade: s.grade,
+                letterGrade: getLetterGrade(s.grade),
+                remarks: s.remark,
+                status: s.grade >= 40 ? "Passed" : "Failed",
+            }));
+
+            let grandTotal = 0;
+            card.subjectResults.forEach((sr) => {
+                grandTotal += Number(sr.score || 0);
+            });
+            const count = card.subjectResults.length;
+            card.totalScore = grandTotal;
+            card.totalMaxScore = count * 100;
+            card.averageScore = count > 0 ? Number((grandTotal / count).toFixed(1)) : 0;
+            card.overallGrade = getLetterGrade(card.averageScore);
+            card.overallRemark = getSubjectRemark(card.averageScore);
+        }
+
+        const prevStatus = card.status;
+        const oldReason = card.rejectionReason || "";
+        card.status = "resubmitted";
+        card.resubmittedBy = req.userAuth?._id;
+        card.resubmittedAt = now;
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "resubmitted",
+            performedBy: req.userAuth?._id,
+            performerModel: "Teacher",
+            performerName: req.userAuth?.name || "Class Teacher",
+            timestamp: now,
+            reason: oldReason ? `Corrected in response to: "${oldReason}"` : "Resubmitted after correction",
+            previousStatus: prevStatus,
+            newStatus: "resubmitted",
+        });
+
+        await card.save();
+    }
+
+    const resubmitStudentIds = cards.map(c => c.student?._id || c.student).filter(Boolean);
+    const resubmitStudentRegNos = cards.map(c => c.studentID || c.student?.StudentId).filter(Boolean);
+    if (resubmitStudentIds.length > 0 || resubmitStudentRegNos.length > 0) {
+        await ExamResult.updateMany(
+            {
+                $or: [
+                    { studentID: { $in: resubmitStudentRegNos } },
+                    { studentID: { $in: resubmitStudentIds.map(id => id.toString()) } },
+                    { student: { $in: resubmitStudentIds } },
+                ],
+                ...(academicYearId ? { academicYear: academicYearId } : {}),
+                ...(academicTermId ? { academicTerm: academicTermId } : {}),
+            },
+            {
+                $set: {
+                    isTeacherPublished: true,
+                    teacherPublishedAt: now,
+                    teacherPublishedBy: req.userAuth?._id,
+                }
+            }
+        );
+    }
+
+    res.status(200).json({
+        status: "Success",
+        message: `Successfully resubmitted ${cards.length} corrected report cards to Admin.`,
+        resubmittedCount: cards.length,
     });
 });
 
@@ -1474,115 +2297,532 @@ exports.updateTeacherCommentCtrl = AsyncHandler(async (req, res) => {
     });
 });
 
-//@desc Admin approve class results
+//@desc Admin approve class results (Individual or Batch)
 //@route PATCH /api/v1/report-cards/class/approve
 //@access Private (Admin only)
 exports.approveClassReportCardsCtrl = AsyncHandler(async (req, res) => {
-    const { classLevelId, academicYearId, academicTermId, reportCardId } = req.body;
+    const { classLevelId, academicYearId, academicTermId, reportCardId, studentId } = req.body;
 
-    let filter = {};
-    if (reportCardId) {
-        filter._id = reportCardId;
-    } else {
-        if (!classLevelId || !academicYearId || !academicTermId) {
-            return res.status(400).json({
-                status: "failed",
-                message: "Class Level, Academic Year, and Academic Term are required to approve results.",
+    // A. Single student approval
+    if (reportCardId || studentId) {
+        let card = null;
+        if (reportCardId && mongoose.Types.ObjectId.isValid(reportCardId)) {
+            card = await StudentReportCard.findById(reportCardId);
+        }
+        if (!card && studentId) {
+            card = await StudentReportCard.findOne({
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(studentId) ? [{ student: studentId }] : []),
+                    { studentID: studentId },
+                ],
+                ...(academicYearId ? { academicYear: academicYearId } : {}),
+                ...(academicTermId ? { academicTerm: academicTermId } : {}),
+                ...(classLevelId ? { classLevel: classLevelId } : {}),
             });
         }
-        filter = { classLevel: classLevelId, academicYear: academicYearId, academicTerm: academicTermId };
+
+        if (!card) {
+            return res.status(404).json({ status: "failed", message: "Report card not found." });
+        }
+
+        const prevStatus = card.status || "submitted";
+        card.status = "approved";
+        card.approvedBy = req.userAuth?._id;
+        card.approvedAt = new Date();
+        card.rejectionReason = "";
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "approved",
+            performedBy: req.userAuth?._id,
+            performerModel: "Admin",
+            performerName: req.userAuth?.name || "Admin",
+            timestamp: new Date(),
+            reason: "Approved by administrator",
+            previousStatus: prevStatus,
+            newStatus: "approved",
+        });
+
+        await card.save();
+
+        return res.status(200).json({
+            status: "Success",
+            message: `Approved report card for ${card.studentID} successfully.`,
+            data: card,
+        });
     }
 
-    const result = await StudentReportCard.updateMany(filter, {
-        $set: {
-            status: "approved",
-            approvedBy: req.userAuth?._id,
-            approvedAt: new Date(),
-            rejectionReason: "",
-        },
-    });
+    // B. Bulk approval
+    if (!classLevelId || !academicYearId || !academicTermId) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Class Level, Academic Year, and Academic Term are required to approve results.",
+        });
+    }
+
+    const { programId } = req.body;
+    const approveQuery = {
+        classLevel: classLevelId,
+        academicYear: academicYearId,
+        academicTerm: academicTermId,
+        status: { $in: ["submitted", "submitted_to_admin", "resubmitted"] },
+    };
+    if (programId && programId !== "all") {
+        const studentIdsInProg = await Student.find({ program: programId }).distinct("_id");
+        approveQuery.$or = [
+            { program: programId },
+            { student: { $in: studentIdsInProg } },
+        ];
+    }
+
+    const cards = await StudentReportCard.find(approveQuery);
+
+    const now = new Date();
+    for (const card of cards) {
+        const prevStatus = card.status;
+        card.status = "approved";
+        card.approvedBy = req.userAuth?._id;
+        card.approvedAt = now;
+        card.rejectionReason = "";
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "approved",
+            performedBy: req.userAuth?._id,
+            performerModel: "Admin",
+            performerName: req.userAuth?.name || "Admin",
+            timestamp: now,
+            reason: "Batch approved by administrator",
+            previousStatus: prevStatus,
+            newStatus: "approved",
+        });
+
+        await card.save();
+    }
 
     res.status(200).json({
         status: "Success",
-        message: `Approved ${result.modifiedCount} student report cards successfully.`,
+        message: `Approved ${cards.length} student report cards successfully.`,
+        approvedCount: cards.length,
     });
 });
 
-//@desc Admin reject class results with feedback
+//@desc Admin reject class results with feedback (Individual or Batch)
 //@route PATCH /api/v1/report-cards/class/reject
 //@access Private (Admin only)
 exports.rejectClassReportCardsCtrl = AsyncHandler(async (req, res) => {
-    const { classLevelId, academicYearId, academicTermId, reportCardId, rejectionReason } = req.body;
+    const { classLevelId, academicYearId, academicTermId, reportCardId, studentId, rejectionReason } = req.body;
 
-    let filter = {};
-    if (reportCardId) {
-        filter._id = reportCardId;
-    } else {
-        if (!classLevelId || !academicYearId || !academicTermId) {
-            return res.status(400).json({
-                status: "failed",
-                message: "Class Level, Academic Year, and Academic Term are required.",
-            });
-        }
-        filter = { classLevel: classLevelId, academicYear: academicYearId, academicTerm: academicTermId };
+    if (!rejectionReason || !rejectionReason.trim()) {
+        return res.status(400).json({
+            status: "failed",
+            message: "A specific rejection reason is mandatory when returning results for correction.",
+        });
     }
 
-    const result = await StudentReportCard.updateMany(filter, {
-        $set: {
-            status: "rejected",
-            rejectionReason: rejectionReason || "Reopened by administrator for corrections.",
-        },
-    });
+    const reasonText = rejectionReason.trim();
+    const now = new Date();
+
+    // A. Single student rejection
+    if (reportCardId || studentId) {
+        let card = null;
+        if (reportCardId && mongoose.Types.ObjectId.isValid(reportCardId)) {
+            card = await StudentReportCard.findById(reportCardId)
+                .populate("student", "name StudentId");
+        }
+        if (!card && studentId) {
+            card = await StudentReportCard.findOne({
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(studentId) ? [{ student: studentId }] : []),
+                    { studentID: studentId },
+                ],
+                ...(academicYearId ? { academicYear: academicYearId } : {}),
+                ...(academicTermId ? { academicTerm: academicTermId } : {}),
+                ...(classLevelId ? { classLevel: classLevelId } : {}),
+            }).populate("student", "name StudentId");
+        }
+
+        if (!card) {
+            return res.status(404).json({ status: "failed", message: "Report card not found." });
+        }
+
+        const prevStatus = card.status || "submitted";
+        card.status = "returned_for_correction";
+        card.published = false;
+        card.rejectionReason = reasonText;
+        card.rejectedBy = req.userAuth?._id;
+        card.rejectedAt = now;
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "rejected",
+            performedBy: req.userAuth?._id,
+            performerModel: "Admin",
+            performerName: req.userAuth?.name || "Admin",
+            timestamp: now,
+            reason: reasonText,
+            previousStatus: prevStatus,
+            newStatus: "returned_for_correction",
+        });
+
+        await card.save();
+
+        return res.status(200).json({
+            status: "Success",
+            message: `Returned report card for ${card.student?.name || card.studentID} to class teacher for correction.`,
+            data: card,
+        });
+    }
+
+    // B. Bulk rejection
+    if (!classLevelId || !academicYearId || !academicTermId) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Class Level, Academic Year, and Academic Term are required.",
+        });
+    }
+
+    const { programId } = req.body;
+    const rejectQuery = {
+        classLevel: classLevelId,
+        academicYear: academicYearId,
+        academicTerm: academicTermId,
+        published: false,
+        status: { $in: ["submitted", "submitted_to_admin", "resubmitted", "approved"] },
+    };
+    if (programId && programId !== "all") {
+        const studentIdsInProg = await Student.find({ program: programId }).distinct("_id");
+        rejectQuery.$or = [
+            { program: programId },
+            { student: { $in: studentIdsInProg } },
+        ];
+    }
+
+    // Only reject not-yet-published submitted cards (do NOT silently reverse already published results)
+    const cards = await StudentReportCard.find(rejectQuery);
+
+    if (cards.length === 0) {
+        return res.status(404).json({
+            status: "failed",
+            message: "No submitted, unpublished report cards found in this class to return for correction.",
+        });
+    }
+
+    for (const card of cards) {
+        const prevStatus = card.status;
+        card.status = "returned_for_correction";
+        card.published = false;
+        card.rejectionReason = reasonText;
+        card.rejectedBy = req.userAuth?._id;
+        card.rejectedAt = now;
+
+        if (!Array.isArray(card.reviewHistory)) {
+            card.reviewHistory = [];
+        }
+        card.reviewHistory.push({
+            action: "rejected",
+            performedBy: req.userAuth?._id,
+            performerModel: "Admin",
+            performerName: req.userAuth?.name || "Admin",
+            timestamp: now,
+            reason: reasonText,
+            previousStatus: prevStatus,
+            newStatus: "returned_for_correction",
+        });
+
+        await card.save();
+    }
 
     res.status(200).json({
         status: "Success",
-        message: `Returned ${result.modifiedCount} report cards to teacher for correction.`,
+        message: `Returned ${cards.length} report cards to class teacher for correction.`,
+        rejectedCount: cards.length,
     });
 });
 
-//@desc Admin publish class report cards to students
+//@desc Admin publish class report cards to students (Individual or Batch)
 //@route PATCH /api/v1/report-cards/class/publish
 //@access Private (Admin only)
 exports.publishClassReportCardsCtrl = AsyncHandler(async (req, res) => {
-    const { classLevelId, academicYearId, academicTermId, reportCardId, publish = true } = req.body;
+    const { classLevelId, academicYearId, academicTermId, reportCardId, studentId, publish = true } = req.body;
+    const isPublishing = Boolean(publish);
+    const now = new Date();
 
-    let filter = {};
-    if (reportCardId) {
-        filter._id = reportCardId;
-    } else {
-        if (!classLevelId || !academicYearId || !academicTermId) {
-            return res.status(400).json({
-                status: "failed",
-                message: "Class Level, Academic Year, and Academic Term are required.",
+    // A. Single student publication
+    if (reportCardId || studentId) {
+        let card = null;
+        if (reportCardId && mongoose.Types.ObjectId.isValid(reportCardId)) {
+            card = await StudentReportCard.findById(reportCardId)
+                .populate("student", "name StudentId");
+        }
+        if (!card && studentId) {
+            card = await StudentReportCard.findOne({
+                $or: [
+                    ...(mongoose.Types.ObjectId.isValid(studentId) ? [{ student: studentId }] : []),
+                    { studentID: studentId },
+                ],
+                ...(academicYearId ? { academicYear: academicYearId } : {}),
+                ...(academicTermId ? { academicTerm: academicTermId } : {}),
+                ...(classLevelId ? { classLevel: classLevelId } : {}),
+            }).populate("student", "name StudentId");
+        }
+
+        if (!card) {
+            return res.status(404).json({ status: "failed", message: "Report card not found for publication." });
+        }
+
+        const prevStatus = card.status;
+
+        if (isPublishing) {
+            // Validation: must have scores recorded and not be in draft/empty state
+            if (!Array.isArray(card.subjectResults) || card.subjectResults.length === 0) {
+                return res.status(400).json({
+                    status: "failed",
+                    message: `Cannot publish result for ${card.student?.name || card.studentID}: no subject scores recorded.`,
+                });
+            }
+
+            card.published = true;
+            card.status = "published";
+            card.publishedAt = now;
+            card.publishedBy = req.userAuth?._id;
+            card.approvedBy = req.userAuth?._id;
+            card.approvedAt = now;
+
+            if (!Array.isArray(card.reviewHistory)) {
+                card.reviewHistory = [];
+            }
+            card.reviewHistory.push({
+                action: "published",
+                performedBy: req.userAuth?._id,
+                performerModel: "Admin",
+                performerName: req.userAuth?.name || "Admin",
+                timestamp: now,
+                reason: "Officially published to student and parent portals",
+                previousStatus: prevStatus,
+                newStatus: "published",
+            });
+
+            await card.save();
+
+            return res.status(200).json({
+                status: "Success",
+                message: `Officially published report card for ${card.student?.name || card.studentID}! Result is now visible in student and parent portals.`,
+                data: card,
+            });
+        } else {
+            // Unpublish single result
+            card.published = false;
+            card.status = "approved";
+            card.publishedAt = null;
+            card.publishedBy = null;
+
+            if (!Array.isArray(card.reviewHistory)) {
+                card.reviewHistory = [];
+            }
+            card.reviewHistory.push({
+                action: "unpublished",
+                performedBy: req.userAuth?._id,
+                performerModel: "Admin",
+                performerName: req.userAuth?.name || "Admin",
+                timestamp: now,
+                reason: "Unpublished by administrator",
+                previousStatus: prevStatus,
+                newStatus: "approved",
+            });
+
+            await card.save();
+
+            return res.status(200).json({
+                status: "Success",
+                message: `Unpublished report card for ${card.student?.name || card.studentID}. It is no longer visible to students or parents.`,
+                data: card,
             });
         }
-        filter = { classLevel: classLevelId, academicYear: academicYearId, academicTerm: academicTermId };
     }
 
-    const isPublishing = Boolean(publish);
-    const updateFields = isPublishing
-        ? {
-              published: true,
-              status: "published",
-              publishedAt: new Date(),
-              publishedBy: req.userAuth?._id,
-              approvedBy: req.userAuth?._id,
-              approvedAt: new Date(),
-          }
-        : {
-              published: false,
-              status: "approved",
-              publishedAt: null,
-              publishedBy: null,
-          };
+    // B. Bulk publication
+    if (!classLevelId || !academicYearId || !academicTermId) {
+        return res.status(400).json({
+            status: "failed",
+            message: "Class Level, Academic Year, and Academic Term are required.",
+        });
+    }
 
-    const result = await StudentReportCard.updateMany(filter, { $set: updateFields });
+    const { programId } = req.body;
+    const publishQuery = {
+        classLevel: classLevelId,
+        academicYear: academicYearId,
+        academicTerm: academicTermId,
+    };
+    if (programId && programId !== "all") {
+        const studentIdsInProg = await Student.find({ program: programId }).distinct("_id");
+        publishQuery.$or = [
+            { program: programId },
+            { student: { $in: studentIdsInProg } },
+        ];
+    }
+
+    const cards = await StudentReportCard.find(publishQuery);
+
+    if (cards.length === 0) {
+        return res.status(404).json({
+            status: "failed",
+            message: "No report cards found for this class and term.",
+        });
+    }
+
+    if (isPublishing) {
+        // Publish only complete, eligible results (must have subjects and not be rejected or empty)
+        const eligibleCards = cards.filter((c) => {
+            const hasScores = Array.isArray(c.subjectResults) && c.subjectResults.length > 0;
+            const isEligibleStatus = ["submitted", "submitted_to_admin", "resubmitted", "approved", "calculated"].includes(c.status);
+            return hasScores && isEligibleStatus;
+        });
+
+        if (eligibleCards.length === 0) {
+            return res.status(400).json({
+                status: "failed",
+                message: "No eligible complete report cards found to publish. Cards must be submitted and have recorded subject scores.",
+            });
+        }
+
+        for (const card of eligibleCards) {
+            const prevStatus = card.status;
+            card.published = true;
+            card.status = "published";
+            card.publishedAt = now;
+            card.publishedBy = req.userAuth?._id;
+            card.approvedBy = req.userAuth?._id;
+            card.approvedAt = now;
+
+            if (!Array.isArray(card.reviewHistory)) {
+                card.reviewHistory = [];
+            }
+            card.reviewHistory.push({
+                action: "published",
+                performedBy: req.userAuth?._id,
+                performerModel: "Admin",
+                performerName: req.userAuth?.name || "Admin",
+                timestamp: now,
+                reason: "Batch officially published to student and parent portals",
+                previousStatus: prevStatus,
+                newStatus: "published",
+            });
+
+            await card.save();
+        }
+
+        const skippedCount = cards.length - eligibleCards.length;
+
+        return res.status(200).json({
+            status: "Success",
+            message: `Officially released ${eligibleCards.length} report cards! Students can now view and download their results.${skippedCount > 0 ? ` (${skippedCount} incomplete or rejected cards were skipped)` : ""}`,
+            publishedCount: eligibleCards.length,
+            skippedCount,
+            totalCount: cards.length,
+        });
+    } else {
+        // Bulk unpublish
+        const publishedCards = cards.filter((c) => c.published);
+        for (const card of publishedCards) {
+            const prevStatus = card.status;
+            card.published = false;
+            card.status = "approved";
+            card.publishedAt = null;
+            card.publishedBy = null;
+
+            if (!Array.isArray(card.reviewHistory)) {
+                card.reviewHistory = [];
+            }
+            card.reviewHistory.push({
+                action: "unpublished",
+                performedBy: req.userAuth?._id,
+                performerModel: "Admin",
+                performerName: req.userAuth?.name || "Admin",
+                timestamp: now,
+                reason: "Batch unpublished by administrator",
+                previousStatus: prevStatus,
+                newStatus: "approved",
+            });
+
+            await card.save();
+        }
+
+        return res.status(200).json({
+            status: "Success",
+            message: `Unpublished ${publishedCards.length} report cards. Students and parents can no longer access them.`,
+            unpublishedCount: publishedCards.length,
+        });
+    }
+});
+
+//@desc Get audit and review history of a report card
+//@route GET /api/v1/report-cards/:id/history
+//@access Private (Admin or Teacher)
+exports.getReportCardReviewHistoryCtrl = AsyncHandler(async (req, res) => {
+    const { id } = req.params;
+    let card = null;
+
+    if (mongoose.Types.ObjectId.isValid(id)) {
+        card = await StudentReportCard.findById(id)
+            .populate("student", "name email StudentId currentClassLevel")
+            .populate("classLevel", "name")
+            .populate("academicYear", "name")
+            .populate("academicTerm", "name")
+            .populate("submittedBy", "name email teacherId")
+            .populate("approvedBy", "name email")
+            .populate("rejectedBy", "name email")
+            .populate("publishedBy", "name email")
+            .populate("resubmittedBy", "name email teacherId");
+    }
+
+    if (!card) {
+        card = await StudentReportCard.findOne({ studentID: id })
+            .populate("student", "name email StudentId currentClassLevel")
+            .populate("classLevel", "name")
+            .populate("academicYear", "name")
+            .populate("academicTerm", "name")
+            .populate("submittedBy", "name email teacherId")
+            .populate("approvedBy", "name email")
+            .populate("rejectedBy", "name email")
+            .populate("publishedBy", "name email")
+            .populate("resubmittedBy", "name email teacherId");
+    }
+
+    if (!card) {
+        return res.status(404).json({ status: "failed", message: "Report card not found." });
+    }
 
     res.status(200).json({
         status: "Success",
-        message: isPublishing
-            ? `Officially released ${result.modifiedCount} report cards! Students can now view and download their results.`
-            : `Unpublished ${result.modifiedCount} report cards. Students can no longer access them.`,
+        data: {
+            reportCardId: card._id,
+            student: card.student,
+            classLevel: card.classLevel,
+            academicYear: card.academicYear,
+            academicTerm: card.academicTerm,
+            status: card.status,
+            published: card.published,
+            rejectionReason: card.rejectionReason,
+            submittedBy: card.submittedBy,
+            submittedAt: card.submittedAt,
+            approvedBy: card.approvedBy,
+            approvedAt: card.approvedAt,
+            rejectedBy: card.rejectedBy,
+            rejectedAt: card.rejectedAt,
+            resubmittedBy: card.resubmittedBy,
+            resubmittedAt: card.resubmittedAt,
+            publishedBy: card.publishedBy,
+            publishedAt: card.publishedAt,
+            reviewHistory: card.reviewHistory || [],
+        },
     });
 });
 
@@ -1614,31 +2854,50 @@ exports.updateAdminCommentCtrl = AsyncHandler(async (req, res) => {
 //@route GET /api/v1/report-cards/admin/overview
 //@access Private (Admin only)
 exports.getAdminReportCardOverviewCtrl = AsyncHandler(async (req, res) => {
-    const { academicYearId, academicTermId } = req.query;
+    const { academicYearId, academicTermId, programId, program } = req.query;
+    const progQuery = programId || program;
 
     const filter = {};
     if (academicYearId) filter.academicYear = academicYearId;
     if (academicTermId) filter.academicTerm = academicTermId;
 
+    if (progQuery && progQuery !== "all") {
+        const studentIdsInProgram = await Student.find({ program: progQuery }).distinct("_id");
+        filter.$or = [
+            { program: progQuery },
+            { student: { $in: studentIdsInProgram } },
+        ];
+    }
+
     const cards = await StudentReportCard.find(filter)
         .populate("classLevel", "name")
         .populate("academicYear", "name")
         .populate("academicTerm", "name")
-        .populate("student", "name StudentId");
+        .populate("program", "name code")
+        .populate({
+            path: "student",
+            select: "name StudentId program",
+            populate: { path: "program", select: "name code" },
+        });
 
-    // Group cards by classLevel + academicYear + academicTerm
+    // Group cards by classLevel + program + academicYear + academicTerm
     const groupsMap = new Map();
 
     for (const card of cards) {
         const classId = card.classLevel?._id?.toString() || "Unknown";
+        const progId = (card.program?._id || card.program || card.student?.program?._id || card.student?.program)?.toString() || "all";
         const yearId = card.academicYear?._id?.toString() || "Unknown";
         const termId = card.academicTerm?._id?.toString() || "Unknown";
-        const key = `${classId}_${yearId}_${termId}`;
+        const key = `${classId}_${progId}_${yearId}_${termId}`;
 
         if (!groupsMap.has(key)) {
+            const resolvedProgDoc = card.program?._id ? card.program : card.student?.program?._id ? card.student.program : null;
+            const progName = resolvedProgDoc?.name || (progId !== "all" ? "Program" : "All Programs");
             groupsMap.set(key, {
                 classLevelId: card.classLevel?._id,
                 className: card.classLevel?.name || "Unassigned",
+                programId: progId !== "all" ? progId : null,
+                programName: progName,
                 academicYearId: card.academicYear?._id,
                 academicYearName: card.academicYear?.name || "N/A",
                 academicTermId: card.academicTerm?._id,
@@ -1659,7 +2918,8 @@ exports.getAdminReportCardOverviewCtrl = AsyncHandler(async (req, res) => {
 
         const group = groupsMap.get(key);
         group.totalStudents += 1;
-        const st = card.status || "draft";
+        const rawStatus = card.status || "draft";
+        const st = ["submitted_to_admin", "resubmitted"].includes(rawStatus) ? "submitted" : rawStatus;
         if (group.statusCounts[st] !== undefined) group.statusCounts[st] += 1;
         group.totalScoreSum += card.averageScore || 0;
     }
@@ -1686,63 +2946,232 @@ exports.getAdminReportCardOverviewCtrl = AsyncHandler(async (req, res) => {
     });
 });
 
-//@desc Student get their published report cards list
-//@route GET /api/v1/report-cards/student/my-report-cards
-//@access Private (Student only)
-exports.getStudentPublishedReportCardsCtrl = AsyncHandler(async (req, res) => {
-    const student = await Student.findById(req.userAuth?._id);
-    if (!student) {
-        return res.status(404).json({ status: "failed", message: "Student account not found." });
+//@desc Student or Parent get latest published report card
+//@route GET /api/v1/report-cards/student/report-card
+//@access Private (Student or Parent)
+exports.getStudentLatestReportCardCtrl = AsyncHandler(async (req, res) => {
+    let studentObjectIds = [];
+    let studentStringIds = [];
+
+    if (req.userAuth?.role === "parent") {
+        const Parent = require("../../models/Staff/Parent");
+        const parent = await Parent.findById(req.userAuth._id);
+        if (!parent || !parent.children || parent.children.length === 0) {
+            return res.status(200).json({ status: "Success", data: null, message: "No linked children found." });
+        }
+        const targetChildId = req.query.studentId;
+        let childrenToQuery = parent.children;
+        if (targetChildId && targetChildId !== "all") {
+            const match = parent.children.find((c) => c.toString() === targetChildId.toString());
+            if (!match) {
+                return res.status(403).json({ status: "failed", message: "Unauthorized access to this student's report card." });
+            }
+            childrenToQuery = [match];
+        }
+        const studentDocs = await Student.find({ _id: { $in: childrenToQuery } });
+        studentDocs.forEach((s) => {
+            studentObjectIds.push(s._id);
+            if (s.StudentId) studentStringIds.push(s.StudentId);
+            if (s.studentId) studentStringIds.push(s.studentId);
+        });
+    } else {
+        const student = await Student.findById(req.userAuth?._id);
+        if (!student) {
+            return res.status(404).json({ status: "failed", message: "Student account not found." });
+        }
+        studentObjectIds.push(student._id);
+        if (student.StudentId) studentStringIds.push(student.StudentId);
+        if (student.studentId) studentStringIds.push(student.studentId);
     }
 
-    // STRICT WORKFLOW RULE: Students CAN ONLY see published report cards!
-    const cards = await StudentReportCard.find({
-        published: true,
-        $or: [
-            { student: student._id },
-            { studentID: student.StudentId },
+    const studentConditions = [];
+    if (studentObjectIds.length > 0) studentConditions.push({ student: { $in: studentObjectIds } });
+    if (studentStringIds.length > 0) studentConditions.push({ studentID: { $in: studentStringIds } });
+
+    const card = await StudentReportCard.findOne({
+        $and: [
+            { $or: studentConditions },
+            { published: true, status: "published" },
         ],
     })
-        .populate("academicYear", "name")
-        .populate("academicTerm", "name")
-        .populate("classLevel", "name")
-        .sort({ createdAt: -1 });
-
-    res.status(200).json({
-        status: "Success",
-        message: "Published report cards retrieved successfully",
-        data: cards,
-    });
-});
-
-//@desc Student view specific term report card
-//@route GET /api/v1/report-cards/student/term/:termId
-//@access Private (Student only)
-exports.getStudentTermReportCardCtrl = AsyncHandler(async (req, res) => {
-    const student = await Student.findById(req.userAuth?._id);
-    if (!student) {
-        return res.status(404).json({ status: "failed", message: "Student account not found." });
-    }
-
-    const { termId } = req.params;
-    const { academicYearId } = req.query;
-
-    const filter = {
-        academicTerm: termId,
-        $or: [
-            { student: student._id },
-            { studentID: student.StudentId },
-        ],
-    };
-    if (academicYearId) filter.academicYear = academicYearId;
-
-    const reportCard = await StudentReportCard.findOne(filter)
         .populate("student", "name email StudentId currentClassLevel program dateAdmitted")
         .populate("academicYear", "name")
         .populate("academicTerm", "name")
         .populate("classLevel", "name")
         .populate("approvedBy", "name")
-        .populate("publishedBy", "name");
+        .populate("publishedBy", "name")
+        .populate("submittedBy", "name")
+        .sort({ createdAt: -1 });
+
+    if (!card) {
+        return res.status(200).json({
+            status: "Success",
+            message: "No published report cards available yet.",
+            data: null,
+        });
+    }
+
+    res.status(200).json({
+        status: "Success",
+        data: card,
+    });
+});
+
+//@desc Student or Parent get their published report cards list
+//@route GET /api/v1/report-cards/student/my-report-cards
+//@access Private (Student or Parent)
+exports.getStudentPublishedReportCardsCtrl = AsyncHandler(async (req, res) => {
+    let studentIds = [];
+
+    if (req.userAuth?.role === "parent") {
+        const Parent = require("../../models/Staff/Parent");
+        const parent = await Parent.findById(req.userAuth._id);
+        if (!parent || !parent.children || parent.children.length === 0) {
+            return res.status(200).json({
+                status: "Success",
+                message: "No linked children found for this parent.",
+                data: [],
+            });
+        }
+        const targetChildId = req.query.studentId;
+        let childrenToQuery = parent.children;
+        if (targetChildId && targetChildId !== "all") {
+            const match = parent.children.find((c) => c.toString() === targetChildId.toString());
+            if (!match) {
+                return res.status(403).json({ status: "failed", message: "Unauthorized access to this student's report cards." });
+            }
+            childrenToQuery = [match];
+        }
+        const studentDocs = await Student.find({ _id: { $in: childrenToQuery } });
+        const studentObjectIds = [];
+        const studentStringIds = [];
+        studentDocs.forEach((s) => {
+            studentObjectIds.push(s._id);
+            if (s.StudentId) studentStringIds.push(s.StudentId);
+            if (s.studentId) studentStringIds.push(s.studentId);
+        });
+
+        const studentConditions = [];
+        if (studentObjectIds.length > 0) studentConditions.push({ student: { $in: studentObjectIds } });
+        if (studentStringIds.length > 0) studentConditions.push({ studentID: { $in: studentStringIds } });
+
+        // MANDATORY: Student and Parent CAN ONLY see report cards that have been officially published by Admin!
+        const cards = await StudentReportCard.find({
+            $and: [
+                { $or: studentConditions },
+                {
+                    published: true,
+                    status: "published",
+                }
+            ]
+        })
+            .populate("student", "name email StudentId currentClassLevel")
+            .populate("academicYear", "name")
+            .populate("academicTerm", "name")
+            .populate("classLevel", "name")
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            status: "Success",
+            message: "Report cards retrieved successfully",
+            data: cards,
+        });
+    } else {
+        const student = await Student.findById(req.userAuth?._id);
+        if (!student) {
+            return res.status(404).json({ status: "failed", message: "Student account not found." });
+        }
+        const studentObjectIds = [student._id];
+        const studentStringIds = [];
+        if (student.StudentId) studentStringIds.push(student.StudentId);
+        if (student.studentId) studentStringIds.push(student.studentId);
+
+        const studentConditions = [{ student: { $in: studentObjectIds } }];
+        if (studentStringIds.length > 0) studentConditions.push({ studentID: { $in: studentStringIds } });
+
+        // MANDATORY: Student and Parent CAN ONLY see report cards that have been officially published by Admin!
+        const cards = await StudentReportCard.find({
+            $and: [
+                { $or: studentConditions },
+                {
+                    published: true,
+                    status: "published",
+                }
+            ]
+        })
+            .populate("student", "name email StudentId currentClassLevel")
+            .populate("academicYear", "name")
+            .populate("academicTerm", "name")
+            .populate("classLevel", "name")
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            status: "Success",
+            message: "Report cards retrieved successfully",
+            data: cards,
+        });
+    }
+});
+
+//@desc Student or Parent view specific term report card
+//@route GET /api/v1/report-cards/student/term/:termId
+//@access Private (Student or Parent)
+exports.getStudentTermReportCardCtrl = AsyncHandler(async (req, res) => {
+    const studentObjectIds = [];
+    const studentStringIds = [];
+
+    if (req.userAuth?.role === "parent") {
+        const Parent = require("../../models/Staff/Parent");
+        const parent = await Parent.findById(req.userAuth._id);
+        if (!parent || !parent.children || parent.children.length === 0) {
+            return res.status(404).json({ status: "failed", message: "No linked children found for this parent." });
+        }
+        const targetChildId = req.query.studentId;
+        let childrenToQuery = parent.children;
+        if (targetChildId && targetChildId !== "all") {
+            const match = parent.children.find((c) => c.toString() === targetChildId.toString());
+            if (!match) {
+                return res.status(403).json({ status: "failed", message: "Unauthorized access to this student's report card." });
+            }
+            childrenToQuery = [match];
+        }
+        const studentDocs = await Student.find({ _id: { $in: childrenToQuery } });
+        studentDocs.forEach((s) => {
+            studentObjectIds.push(s._id);
+            if (s.StudentId) studentStringIds.push(s.StudentId);
+            if (s.studentId) studentStringIds.push(s.studentId);
+        });
+    } else {
+        const student = await Student.findById(req.userAuth?._id);
+        if (!student) {
+            return res.status(404).json({ status: "failed", message: "Student account not found." });
+        }
+        studentObjectIds.push(student._id);
+        if (student.StudentId) studentStringIds.push(student.StudentId);
+        if (student.studentId) studentStringIds.push(student.studentId);
+    }
+
+    const { termId } = req.params;
+    const { academicYearId } = req.query;
+
+    const studentConditions = [];
+    if (studentObjectIds.length > 0) studentConditions.push({ student: { $in: studentObjectIds } });
+    if (studentStringIds.length > 0) studentConditions.push({ studentID: { $in: studentStringIds } });
+
+    const filter = {
+        academicTerm: termId,
+        $or: studentConditions,
+    };
+    if (academicYearId) filter.academicYear = academicYearId;
+
+    let reportCard = await StudentReportCard.findOne(filter)
+        .populate("student", "name email StudentId currentClassLevel program dateAdmitted")
+        .populate("academicYear", "name")
+        .populate("academicTerm", "name")
+        .populate("classLevel", "name")
+        .populate("approvedBy", "name")
+        .populate("publishedBy", "name")
+        .populate("submittedBy", "name");
 
     if (!reportCard) {
         return res.status(404).json({
@@ -1751,17 +3180,23 @@ exports.getStudentTermReportCardCtrl = AsyncHandler(async (req, res) => {
         });
     }
 
-    // STRICT WORKFLOW RULE (Section 18): Unpublished result CANNOT be viewed by student
-    if (!reportCard.published) {
+    // MANDATORY WORKFLOW RULE: Student and parent CANNOT view report card until Admin officially publishes!
+    const isOfficiallyPublished =
+        reportCard.published === true &&
+        reportCard.status === "published";
+
+    if (!isOfficiallyPublished) {
         return res.status(403).json({
             status: "failed",
-            message: "Your report card has not been published yet.",
+            message: "This report card is currently undergoing review and has not yet been officially published by school administration.",
         });
     }
 
+    await syncMissingReportCardSubjects(reportCard, studentObjectIds[0]);
+
     res.status(200).json({
         status: "Success",
-        message: "Official report card retrieved successfully",
+        message: "Term report card retrieved successfully",
         data: reportCard,
     });
 });
@@ -1855,7 +3290,7 @@ exports.getStudentFullReportCardCtrl = AsyncHandler(async (req, res) => {
         fallbackSubs.forEach((s) => regSubjectsMap.set(s._id.toString(), s));
     }
 
-    const registeredSubjectDocs = Array.from(regSubjectsMap.values());
+    let registeredSubjectDocs = Array.from(regSubjectsMap.values());
 
     // 2. Query StudentSubjectResult for this student + year + term
     const subjectResultsQuery = {
@@ -1879,16 +3314,66 @@ exports.getStudentFullReportCardCtrl = AsyncHandler(async (req, res) => {
     };
     if (classDoc?._id) reportCardQuery.classLevel = classDoc._id;
     const existingCard = await StudentReportCard.findOne(reportCardQuery)
-        .populate("approvedBy", "name")
-        .populate("publishedBy", "name");
+        .populate("approvedBy", "name email")
+        .populate("publishedBy", "name email")
+        .populate("submittedBy", "name email");
 
-    // Enforce student publication rule
-    if (req.userAuth?.role === "student" && (!existingCard || !existingCard.published)) {
-        return res.status(403).json({
-            status: "failed",
-            message: "Your report card for this term has not been officially published yet.",
+    let resolvedTeacherName = existingCard?.submittedBy?.name || null;
+    if (!resolvedTeacherName && classDoc?._id) {
+        const cta = await ClassTeacherAssignment.findOne({
+            classLevel: classDoc._id,
+            isActive: true,
+            ...(studentDoc.program ? { program: studentDoc.program } : {}),
+        }).populate("teacher", "name");
+        if (cta?.teacher?.name) {
+            resolvedTeacherName = cta.teacher.name;
+        } else {
+            const fallbackCta = await ClassTeacherAssignment.findOne({
+                classLevel: classDoc._id,
+                isActive: true,
+            }).populate("teacher", "name");
+            if (fallbackCta?.teacher?.name) {
+                resolvedTeacherName = fallbackCta.teacher.name;
+            }
+        }
+    }
+
+    // Enforce student & parent publication rule: Cannot see until Admin approves!
+    if (["student", "parent"].includes(req.userAuth?.role)) {
+        const isApproved = existingCard && (existingCard.published || existingCard.status === "approved" || existingCard.status === "published" || Boolean(existingCard.approvedBy));
+        if (!isApproved) {
+            return res.status(403).json({
+                status: "failed",
+                message: "Your report card for this term has not been officially approved or published by school administration yet.",
+            });
+        }
+    }
+
+    // Also include any subjects present in recordedResults or existingCard.subjectResults
+    recordedResults.forEach((r) => {
+        const sId = (r.subject?._id || r.subject)?.toString();
+        if (sId && !regSubjectsMap.has(sId)) {
+            regSubjectsMap.set(sId, {
+                _id: r.subject?._id || r.subject,
+                name: r.subjectName || r.subject?.name || "Subject",
+                teacher: r.recordedBy,
+            });
+        }
+    });
+
+    if (existingCard && Array.isArray(existingCard.subjectResults)) {
+        existingCard.subjectResults.forEach((cr) => {
+            const sId = cr.subject?.toString();
+            if (sId && !regSubjectsMap.has(sId)) {
+                regSubjectsMap.set(sId, {
+                    _id: cr.subject,
+                    name: cr.subjectName || "Subject",
+                });
+            }
         });
     }
+
+    registeredSubjectDocs = Array.from(regSubjectsMap.values());
 
     // 4. Construct complete subject rows with teacher names and Pending state
     const tableRows = [];
@@ -2013,8 +3498,10 @@ exports.getStudentFullReportCardCtrl = AsyncHandler(async (req, res) => {
         status: existingCard?.status || (isFullySubmitted ? "ready" : "draft"),
         published: existingCard?.published || false,
         publishedAt: existingCard?.publishedAt || null,
+        approvedAt: existingCard?.approvedAt || null,
         approvedBy: existingCard?.approvedBy || null,
-        submittedBy: existingCard?.submittedBy || null,
+        submittedAt: existingCard?.submittedAt || null,
+        submittedBy: existingCard?.submittedBy || (resolvedTeacherName ? { name: resolvedTeacherName } : null),
         attendance: existingCard?.attendance || { daysOpened: 65, daysPresent: 60, daysAbsent: 5 },
         traits: existingCard?.traits || { punctuality: "Good", attentiveness: "Good", neatness: "Good", politeness: "Good", teamwork: "Good" },
         nextTermBegins: existingCard?.nextTermBegins || null,
@@ -2060,19 +3547,57 @@ exports.getSingleReportCardByIdCtrl = AsyncHandler(async (req, res) => {
 
 //@desc Student view latest published report card (Section 21 & 26: GET /api/v1/report-cards/student/report-card)
 //@route GET /api/v1/report-cards/student/report-card
-//@access Private (Student only)
+//@desc Student or Parent view latest published report card (Section 21 & 26: GET /api/v1/report-cards/student/report-card)
+//@route GET /api/v1/report-cards/student/report-card
+//@access Private (Student or Parent)
 exports.getStudentLatestReportCardCtrl = AsyncHandler(async (req, res) => {
-    const student = await Student.findById(req.userAuth?._id);
-    if (!student) {
+    let studentDoc = null;
+
+    if (req.userAuth?.role === "parent") {
+        const Parent = require("../../models/Staff/Parent");
+        const parent = await Parent.findById(req.userAuth._id);
+        if (!parent || !parent.children || parent.children.length === 0) {
+            return res.status(404).json({ status: "failed", message: "No linked children found for this parent." });
+        }
+        const targetChildId = req.query.studentId;
+        if (targetChildId && targetChildId !== "all") {
+            const match = parent.children.find((c) => c.toString() === targetChildId.toString());
+            if (!match) {
+                return res.status(403).json({ status: "failed", message: "Unauthorized access to this student's report card." });
+            }
+            studentDoc = await Student.findById(match);
+        } else {
+            studentDoc = await Student.findById(parent.children[0]);
+        }
+    } else {
+        studentDoc = await Student.findById(req.userAuth?._id);
+    }
+
+    if (!studentDoc) {
         return res.status(404).json({ status: "failed", message: "Student account not found." });
     }
 
+    const studentMatchConditions = [{ student: studentDoc._id }];
+    if (studentDoc.StudentId) {
+        studentMatchConditions.push({ studentID: studentDoc.StudentId });
+    }
+    if (studentDoc.studentId) {
+        studentMatchConditions.push({ studentID: studentDoc.studentId });
+    }
+
+    // MANDATORY WORKFLOW RULE: Student and Parent CAN ONLY see report cards that have been approved or published by Admin!
     const reportCard = await StudentReportCard.findOne({
-        published: true,
-        $or: [
-            { student: student._id },
-            { studentID: student.StudentId },
-        ],
+        $and: [
+            { $or: studentMatchConditions },
+            {
+                $or: [
+                    { published: true },
+                    { status: "published" },
+                    { status: "approved" },
+                    { approvedBy: { $exists: true, $ne: null } }
+                ]
+            }
+        ]
     })
         .populate("student", "name email StudentId currentClassLevel program dateAdmitted")
         .populate("academicYear", "name")
@@ -2080,18 +3605,21 @@ exports.getStudentLatestReportCardCtrl = AsyncHandler(async (req, res) => {
         .populate("classLevel", "name")
         .populate("approvedBy", "name")
         .populate("publishedBy", "name")
+        .populate("submittedBy", "name")
         .sort({ createdAt: -1 });
 
     if (!reportCard) {
         return res.status(403).json({
             status: "failed",
-            message: "Report card has not yet been published.",
+            message: "Report card has not yet been approved or published by school administration.",
         });
     }
 
+    await syncMissingReportCardSubjects(reportCard, studentDoc._id);
+
     res.status(200).json({
         status: "Success",
-        message: "Latest published report card retrieved successfully",
+        message: "Latest report card retrieved successfully",
         data: reportCard,
     });
 });
