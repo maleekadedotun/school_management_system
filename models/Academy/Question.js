@@ -42,6 +42,33 @@ const questionSchema = new mongoose.Schema(
             ref: "Teacher",
             required: true,
         },
+
+        exam: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Exam",
+        },
+
+        academicYear: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AcademicYear",
+            required: false,
+        },
+
+        academicTerm: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "AcademicTerm",
+            required: false,
+        },
+
+        academicYearName: {
+            type: String,
+            required: false,
+        },
+
+        academicTermName: {
+            type: String,
+            required: false,
+        },
         
     },
     

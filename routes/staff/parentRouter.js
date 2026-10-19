@@ -12,7 +12,6 @@ const isAnyUserAuth = require("../../middlewares/isAnyUserAuth");
 const roleRestriction = require("../../middlewares/roleRestriction");
 
 // Public routes
-parentRouter.post("/register", parentRegisterCtrl);
 parentRouter.post("/login", parentLoginCtrl);
 
 // Authenticated Parent & Admin routes
@@ -37,7 +36,14 @@ parentRouter.post(
   linkStudentToParentCtrl
 );
 
-// Admin-only parent management
+// Admin-only parent management & registration
+parentRouter.post(
+  "/register",
+  isAnyUserAuth,
+  roleRestriction("admin"),
+  parentRegisterCtrl
+);
+
 parentRouter.get(
   "/",
   isAnyUserAuth,
